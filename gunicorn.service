@@ -1,0 +1,37 @@
+# Gunicorn Systemd Service Configuration
+# Location: /etc/systemd/system/gunicorn.service
+
+[Unit]
+Description=Gunicorn daemon for Smart City Backend
+After=network.target
+
+[Service]
+Type=notify
+User=root
+Group=www-data
+WorkingDirectory=/var/www/smartcity-backend
+
+# Environment variables
+Environment="PATH=/var/www/smartcity-backend/venv/bin"
+Environment="DJANGO_SETTINGS_MODULE=smartcity_backend.settings"
+
+# Gunicorn configuration
+ExecStart=/var/www/smartcity-backend/venv/bin/gunicorn \
+    --workers 3 \
+    --bind 127.0.0.1:8000 \
+    --timeout 120 \
+    --access-logfile /var/log/gunicorn-access.log \
+    --error-logfile /var/log/gunicorn-error.log \
+    --log-level info \
+    smartcity_backend.wsgi:application
+
+# Restart policy
+Restart=on-failure
+RestartSec=5s
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

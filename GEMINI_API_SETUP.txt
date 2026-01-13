@@ -1,0 +1,50 @@
+# Gemini API Key Setup Instructions
+
+## 1. Get API Key
+https://aistudio.google.com/apikey
+- Click "Create API Key"
+- Copy the key (starts with: AIzaSy...)
+
+## 2. Create .env file
+
+Windows (Local):
+E:\Smartcity\frontend\.env
+
+Content:
+GEMINI_API_KEY=AIzaSyYourActualKeyHere
+VITE_GEMINI_API_KEY=AIzaSyYourActualKeyHere
+
+## 3. Build
+cd E:\Smartcity\frontend
+npm run build
+
+## 4. Push to GitHub
+git add .
+git commit -m "Add: Gemini API key"
+git push origin master
+
+## 5. Server Deploy
+ssh root@167.71.53.238
+
+cd /var/www/smartcity-frontend
+
+# Create .env
+nano .env
+# Paste:
+# GEMINI_API_KEY=AIzaSyYourActualKeyHere
+# VITE_GEMINI_API_KEY=AIzaSyYourActualKeyHere
+# Save: CTRL+O, ENTER, CTRL+X
+
+git pull origin master
+npm run build
+sudo cp -r dist/* /var/www/html/smartcity/
+
+## 6. Test
+Browser: https://fergana.cdcgroup.uz
+Module: Chiqindi
+Action: Upload image
+Result: AI should analyze in 30 seconds
+
+---
+
+IMPORTANT: Don't commit .env to GitHub!

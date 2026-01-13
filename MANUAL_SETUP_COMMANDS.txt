@@ -1,0 +1,182 @@
+# Smart City Manual Setup Commands
+# Server'da terminal'ga copy-paste qiling
+
+# ============================================
+# 1. SYSTEM UPDATE
+# ============================================
+sudo apt update && sudo apt upgrade -y
+
+
+# ============================================
+# 2. INSTALL PACKAGES
+# ============================================
+# Python
+sudo apt install -y python3 python3-pip python3-venv
+
+# Node.js
+curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+sudo apt install -y nodejs
+
+# Nginx & Git
+sudo apt install -y nginx git
+
+
+# ============================================
+# 3. CREATE DIRECTORIES
+# ============================================
+sudo mkdir -p /var/www/smartcity-backend
+sudo mkdir -p /var/www/smartcity-frontend
+sudo mkdir -p /var/www/html/smartcity
+
+
+# ============================================
+# 4. BACKEND SETUP
+# ============================================
+cd /var/www
+git clone https://github.com/aiziyrak-coder/shaxarApi.git smartcity-backend
+cd smartcity-backend
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+pip install gunicorn
+python manage.py migrate
+python create_superusers.py
+python manage.py collectstatic --noinput
+deactivate
+
+
+# ============================================
+# 5. FRONTEND SETUP
+# ============================================
+cd /var/www
+git clone https://github.com/aiziyrak-coder/shaxar.git smartcity-frontend
+cd smartcity-frontend
+npm install
+npm run build
+sudo cp -r dist/* /var/www/html/smartcity/
+
+
+# ============================================
+# 6. GUNICORN SERVICE
+# ============================================
+sudo nano /etc/systemd/system/gunicorn.service
+
+# Copy this content:
+[Unit]
+Description=Gunicorn daemon for Smart City Backend
+After=network.target
+
+[Service]
+User=root
+Group=www-data
+WorkingDirectory=/var/www/smartcity-backend
+Environment="PATH=/var/www/smartcity-backend/venv/bin"
+ExecStart=/var/www/smartcity-backend/venv/bin/gunicorn \
+    --workers 3 \
+    --bind 127.0.0.1:8000 \
+    --timeout 120 \
+    smartcity_backend.wsgi:application
+
+[Install]
+WantedBy=multi-user.target
+
+# Save (CTRL+O, ENTER, CTRL+X)
+
+# Start service
+sudo systemctl daemon-reload
+sudo systemctl start gunicorn
+sudo systemctl enable gunicorn
+sudo systemctl status gunicorn
+
+
+# ============================================
+# 7. NGINX BACKEND CONFIG
+# ============================================
+sudo nano /etc/nginx/sites-available/ferganaapi.cdcgroup.uz
+
+# Copy this content:
+server {
+    listen 80;
+    server_name ferganaapi.cdcgroup.uz;
+
+    client_max_body_size 20M;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /static/ {
+        alias /var/www/smartcity-backend/static/;
+    }
+
+    location /media/ {
+        alias /var/www/smartcity-backend/media/;
+    }
+}
+
+# Save (CTRL+O, ENTER, CTRL+X)
+
+
+# ============================================
+# 8. NGINX FRONTEND CONFIG
+# ============================================
+sudo nano /etc/nginx/sites-available/fergana.cdcgroup.uz
+
+# Copy this content:
+server {
+    listen 80;
+    server_name fergana.cdcgroup.uz;
+
+    root /var/www/html/smartcity;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+
+# Save (CTRL+O, ENTER, CTRL+X)
+
+
+# ============================================
+# 9. ENABLE SITES & RESTART NGINX
+# ============================================
+sudo ln -s /etc/nginx/sites-available/ferganaapi.cdcgroup.uz /etc/nginx/sites-enabled/
+sudo ln -s /etc/nginx/sites-available/fergana.cdcgroup.uz /etc/nginx/sites-enabled/
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t
+sudo systemctl restart nginx
+
+
+# ============================================
+# 10. CHECK STATUS
+# ============================================
+sudo systemctl status gunicorn
+sudo systemctl status nginx
+
+
+# ============================================
+# 11. TEST
+# ============================================
+# Browser'da oching:
+# - http://fergana.cdcgroup.uz
+# - http://ferganaapi.cdcgroup.uz/admin
+#
+# Login: fergana / 123
+
+
+# ============================================
+# 12. SSL (OPTIONAL - DNS kerak)
+# ============================================
+sudo apt install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d fergana.cdcgroup.uz
+sudo certbot --nginx -d ferganaapi.cdcgroup.uz
+
+
+# ============================================
+# DONE!
+# ============================================
