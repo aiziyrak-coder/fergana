@@ -1,221 +1,160 @@
-# 🚀 Server'ga Deploy Qilish (Ma'lumotlar Saqlanadi)
+# 🚀 Serverga Deploy Qilish Qo'llanmasi
 
-## ⚠️ MUHIM: Ma'lumotlar O'chib Ketmaydi!
+## ✅ GitHub Push Muvaffaqiyatli
 
-Database backup allaqachon olingan:
-```
-✓ backups/db_backup_20260113_025605.sqlite3 (656 KB)
-```
+### Push Qilingan Repository'lar:
+- ✅ **Backend**: https://github.com/aiziyrak-coder/shaxarApi.git
+- ✅ **Frontend**: https://github.com/aiziyrak-coder/shaxar.git
 
 ---
 
-## 📋 Deploy Jarayoni
+## 📋 Serverga Deploy Qadamlari
 
-### 1️⃣ Server'ga Ulanish
-
+### 1. Server'ga SSH orqali ulanish
 ```bash
 ssh root@167.71.53.238
+# yoki
+ssh user@ferganaapi.cdcgroup.uz
 ```
 
-### 2️⃣ Backend Database Backup (Server'da)
+### 2. Backend Deploy
 
 ```bash
-# Backend papkasiga o'ting
+# Backend papkasiga o'tish
 cd /var/www/smartcity-backend
+# yoki
+cd /path/to/backend
 
-# Backup yaratish
-python3 backup_database.py
-```
-
-**Kutilgan natija:**
-```
-Database backup boshlandi...
-==================================================
-[SUCCESS] Database backup yaratildi!
-[FILE] backups/db_backup_YYYYMMDD_HHMMSS.sqlite3
-[SIZE] XXX.XX KB
-==================================================
-```
-
-### 3️⃣ Deploy Qilish
-
-```bash
-# Deploy scriptini ishlatish
-chmod +x deploy.sh
-./deploy.sh
-```
-
-**Yoki manual:**
-
-```bash
-# Backend yangilash
-cd /var/www/smartcity-backend
+# Git'dan yangilash
 git pull origin master
 
-# Virtual environment aktivlash
+# Virtual environment'ni faollashtirish (agar kerak bo'lsa)
 source venv/bin/activate
 
-# Dependencies (agar kerak bo'lsa)
+# Dependencies yangilash (agar kerak bo'lsa)
 pip install -r requirements.txt
 
-# Migration (ma'lumotlar saqlanadi!)
+# Migration'larni bajarish
 python manage.py migrate
 
-# Static files
+# Static fayllarni yig'ish
 python manage.py collectstatic --noinput
 
-# Gunicorn restart
+# Gunicorn'ni qayta ishga tushirish
 sudo systemctl restart gunicorn
+# yoki
+sudo systemctl restart smartcity-backend
 
-# Frontend yangilash
+# Nginx'ni qayta yuklash
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+### 3. Frontend Deploy
+
+```bash
+# Frontend papkasiga o'tish
 cd /var/www/smartcity-frontend
-git pull origin master
-npm install
-npm run build
-sudo rm -rf /var/www/html/smartcity/*
-sudo cp -r dist/* /var/www/html/smartcity/
+# yoki
+cd /path/to/frontend
 
-# Nginx restart
-sudo systemctl restart nginx
+# Git'dan yangilash
+git pull origin master
+
+# Dependencies yangilash (agar kerak bo'lsa)
+npm install
+
+# Production build yaratish
+npm run build
+
+# Build fayllarni nginx'ga ko'chirish
+sudo cp -r dist/* /var/www/html/
+# yoki
+sudo cp -r dist/* /usr/share/nginx/html/
+```
+
+### 4. Tekshirish
+
+```bash
+# Backend tekshirish
+curl https://ferganaapi.cdcgroup.uz/api/auth/validate/
+# Response: {"valid": false} yoki {"valid": true}
+
+# Frontend tekshirish
+curl https://fergana.cdcgroup.uz
+# HTML qaytarishi kerak
+
+# Log'larni tekshirish
+sudo tail -f /var/log/nginx/ferganaapi-error.log
+sudo tail -f /var/www/smartcity-backend/django.log
 ```
 
 ---
 
-## 🔍 Tekshirish
+## 🔧 O'zgarishlar
 
-### Service Status
+### Backend O'zgarishlari:
+1. ✅ Deduplication qo'shildi (WasteBin, Truck, Facility, Room, Boiler, IoTDevice)
+2. ✅ Transaction handling qo'shildi
+3. ✅ validate_token endpoint yaxshilandi (GET/POST support)
+4. ✅ IoT sensor validation yaxshilandi
+5. ✅ Logging yaxshilandi
+
+### Frontend O'zgarishlari:
+1. ✅ ErrorBoundary komponenti qo'shildi
+2. ✅ Race condition fix (polling)
+3. ✅ Console.log optimizatsiyasi (production mode)
+4. ✅ Error handling yaxshilandi
+
+---
+
+## ⚠️ Muhim Eslatmalar
+
+1. **Database Migration**: Migration'larni bajarishni unutmang
+2. **Static Files**: collectstatic bajarilishi kerak
+3. **Service Restart**: Gunicorn va Nginx'ni qayta ishga tushirish kerak
+4. **Environment Variables**: .env fayllarini tekshiring
+5. **Permissions**: Fayl ruxsatlarini tekshiring
+
+---
+
+## 🐛 Muammo Bo'lsa
+
+### Backend ishlamasa:
 ```bash
+# Gunicorn status
 sudo systemctl status gunicorn
-sudo systemctl status nginx
-```
 
-### Loglarni Ko'rish
-```bash
-# Real-time logs
+# Log'larni ko'rish
 sudo journalctl -u gunicorn -f
 
-# Nginx errors
-sudo tail -f /var/log/nginx/error.log
-```
-
-### Database Tekshirish
-```bash
-cd /var/www/smartcity-backend
-python manage.py shell
-```
-
-```python
-from smartcity_app.models import Organization, WasteBin
-print(f"Organizations: {Organization.objects.count()}")
-print(f"Waste Bins: {WasteBin.objects.count()}")
-# Ma'lumotlar saqlanishi kerak!
-```
-
----
-
-## 🌐 Test Qilish
-
-### URL'larni Tekshirish
-- ✅ Frontend: https://fergana.cdcgroup.uz
-- ✅ Backend: https://ferganaapi.cdcgroup.uz
-- ✅ Admin: https://ferganaapi.cdcgroup.uz/admin
-
-### Login Test
-1. Browser'da frontend'ni oching
-2. Login qiling: `fergana` / `123`
-3. Dashboard ochilishi kerak
-4. Barcha ma'lumotlar ko'rinishi kerak
-
-### Console Tekshirish (F12)
-- ✅ CSRF xatosi yo'q
-- ✅ Tailwind CDN warning yo'q
-- ✅ API requestlar ishlayapti
-
----
-
-## 🔄 Agar Muammo Bo'lsa
-
-### Database Restore (faqat zarurat bo'lsa!)
-```bash
-cd /var/www/smartcity-backend
-
-# Eng yangi backup'ni topish
-ls -lh backups/
-
-# Restore qilish (EHTIYOT BO'LING!)
-# cp backups/db_backup_YYYYMMDD_HHMMSS.sqlite3 db.sqlite3
-
-# Service restart
+# Qayta ishga tushirish
 sudo systemctl restart gunicorn
 ```
 
-### Service Restart
+### Frontend ishlamasa:
 ```bash
-sudo systemctl restart gunicorn
+# Nginx status
+sudo systemctl status nginx
+
+# Nginx config tekshirish
+sudo nginx -t
+
+# Qayta ishga tushirish
 sudo systemctl restart nginx
 ```
-
-### Cache Tozalash
-```bash
-# Browser cache tozalang (CTRL+SHIFT+DELETE)
-# Yoki incognito/private mode ishlatng
-```
-
----
-
-## ✅ Deploy Success Checklist
-
-- [ ] Server'ga ulandi
-- [ ] Database backup olindi (server'da)
-- [ ] Backend git pull ishladi
-- [ ] Frontend git pull ishladi
-- [ ] Frontend build yaratildi
-- [ ] Services restart qilindi
-- [ ] URL'lar ochiladi
-- [ ] Login ishlaydi
-- [ ] Ma'lumotlar ko'rinadi
-- [ ] CSRF/Tailwind xatolari yo'q
-
----
-
-## 📊 O'zgarishlar Xulosasi
-
-### Backend
-- ✅ CSRF o'chirildi (Token auth ishlatiladi)
-- ✅ CORS production uchun sozlandi
-- ✅ Database backup script qo'shildi
-- ⚠️ Barcha mavjud ma'lumotlar SAQLANADI
-
-### Frontend
-- ✅ Tailwind CSS to'g'ri o'rnatildi
-- ✅ Production build optimallashtirildi
-- ✅ CDN o'chirildi
-- ✅ API URL yangilandi
-
----
-
-## 🔐 Xavfsizlik
-
-### Ma'lumotlar Saqlanadi ✅
-- Database fayli o'zgartirilmaydi
-- Migration faqat struktura yangilaydi
-- Backup har doim olinadi
-- Rollback mumkin
-
-### Token Authentication
-- CSRF o'rniga Token ishlatiladi
-- Har bir request'da token tekshiriladi
-- Xavfsizroq va zamonaviy
 
 ---
 
 ## 📞 Yordam
 
-Muammo yuzaga kelsa:
-1. Loglarni tekshiring: `sudo journalctl -u gunicorn -f`
-2. Service status: `sudo systemctl status gunicorn nginx`
-3. Database backup'dan restore qiling (agar kerak bo'lsa)
+Agar muammo bo'lsa:
+1. Log'larni tekshiring
+2. Service status'ni tekshiring
+3. Network connectivity'ni tekshiring
+4. Database connection'ni tekshiring
 
 ---
 
-**Eslatma:** Deploy jarayonida ma'lumotlar HECH QACHON o'chib ketmaydi! Backup olingan va migrate faqat struktura yangilaydi, ma'lumotlarni o'zgartirmaydi.
+**Oxirgi Yangilanish**: 2026-yil 25-yanvar
+**Status**: ✅ GitHub'ga push qilindi, serverga deploy qilish kerak
