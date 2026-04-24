@@ -37,6 +37,10 @@ ALLOWED_HOSTS = [
     '167.71.53.238',
 ]
 
+# Behind nginx TLS termination (fixes admin/session and secure cookies).
+USE_X_FORWARDED_HOST = True
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
 
 # Application definition
 

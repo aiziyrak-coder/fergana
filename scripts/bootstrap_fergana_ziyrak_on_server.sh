@@ -112,9 +112,9 @@ setup_gunicorn_unit() {
 
 build_frontend() {
   cd "${REPO}/frontend"
-  if [[ -f .env.production.example ]] && [[ ! -f .env.production ]]; then
-    cp .env.production.example .env.production
-  fi
+  # Always pin production API URL so stale .env.production cannot embed cdcgroup.uz in the bundle.
+  printf '%s\n' '# Written by bootstrap — do not point at dead domains' >.env.production
+  printf '%s\n' 'VITE_API_BASE_URL=https://ferganaapi.ziyrak.org/api' >>.env.production
   if [[ -f package-lock.json ]]; then
     npm ci
   else
