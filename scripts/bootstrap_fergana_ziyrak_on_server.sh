@@ -91,6 +91,9 @@ setup_python() {
   python manage.py collectstatic --noinput
 
   mkdir -p "${REPO}/backend/media"
+  # SQLite needs the DB directory writable by Gunicorn (www-data) for WAL/SHM files.
+  chgrp www-data "${REPO}/backend" || true
+  chmod 2775 "${REPO}/backend" || true
   if [[ -f "${REPO}/backend/db.sqlite3" ]]; then
     chown www-data:www-data "${REPO}/backend/db.sqlite3" || true
     chmod 664 "${REPO}/backend/db.sqlite3" || true
