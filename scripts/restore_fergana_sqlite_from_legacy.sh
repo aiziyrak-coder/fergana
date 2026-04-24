@@ -95,8 +95,13 @@ main() {
   fix_perms
 
   export DJANGO_SETTINGS_MODULE=smartcity_backend.settings
-  # Apply any newer migrations (e.g. livestock tables) without wiping restored data.
-  "${VENV}/bin/python" "${DEST_DIR}/manage.py" migrate --noinput
+  cd "${DEST_DIR}"
+  # Legacy DB may already contain livestock tables but not record migration 0010.
+  if ! "${VENV}/bin/python" manage.py migrate --noinput; then
+    echo "migrate had errors; attempting to fake livestock migration if tables already exist..."
+    "${VENV}/bin/python" manage.py migrate smartcity_app 0010_livestock_farm_microchip --fake || true
+    "${VENV}/bin/python" manage.py migrate --noinput
+  fi
 
   systemctl restart fergana-smartcity-gunicorn.service
   echo "Restore complete. API DB: ${DEST_DB}"
