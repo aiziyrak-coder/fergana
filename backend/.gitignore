@@ -1,4 +1,5 @@
 # Python
+*.pyc
 __pycache__/
 *.py[cod]
 *$py.class
@@ -7,6 +8,18 @@ __pycache__/
 env/
 venv/
 ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
 *.egg-info/
 .installed.cfg
 *.egg
@@ -18,19 +31,12 @@ db.sqlite3
 db.sqlite3-journal
 /static/
 /staticfiles/
+
+# Media files (if you want to ignore them)
 /media/
 /qr_codes/
 
-# Node
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
-dist/
-build/
-
-# Environment
+# Environment variables
 .env
 .env.local
 .env.production
@@ -54,25 +60,8 @@ htmlcov/
 *.backup
 *.sql
 backups/
-*.sqlite3
-
-# Frontend build
-frontend/dist/
-frontend/.vite/
-
-# MacOS
-__MACOSX/
-*.DS_Store
 
 # Logs
 *.log
 django.log
 bot.log
-
-# Temporary files
-*.tmp
-*.temp
-
-# Telegram / local session stores (never commit)
-*.session
-*.session-journal

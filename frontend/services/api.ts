@@ -1,0 +1,982 @@
+import { Organization, CallRequest, MoistureSensor, WasteBin, Truck, Facility, AirSensor, SOSColumn, ConstructionSite, LightPole, Bus, EcoViolation, IoTDevice, Room, Boiler, Farm, LivestockAnimal, LivestockPassport, MicrochipDevice, LivestockStatistics } from '../types';
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'https://ferganaapi.ziyrak.org/api';
+
+// Map backend IoT device (snake_case) to frontend IoTDevice (camelCase)
+const mapIoTDevice = (d: any): IoTDevice => ({
+  id: d.id,
+  deviceId: d.device_id,
+  deviceType: d.device_type,
+  roomId: d.room || undefined,
+  boilerId: d.boiler || undefined,
+  location: d.location,
+  lastSeen: d.last_seen,
+  isActive: d.is_active,
+  createdAt: d.created_at,
+  current_temperature: d.current_temperature,
+  current_humidity: d.current_humidity,
+  last_sensor_update: d.last_sensor_update,
+});
+
+// Map backend WasteBin (snake_case) to frontend WasteBin (camelCase)
+const mapWasteBin = (bin: any): WasteBin => ({
+  id: bin.id,
+  location: bin.location,
+  address: bin.address,
+  tozaHudud: bin.toza_hudud,
+  fillLevel: bin.fill_level,
+  fillRate: bin.fill_rate,
+  lastAnalysis: bin.last_analysis,
+  imageUrl: bin.image_url,
+  imageSource: bin.image_source,
+  cameraUrl: bin.camera_url,
+  googleMapsUrl: bin.google_maps_url,
+  isFull: bin.is_full,
+  deviceHealth: bin.device_health,
+  qrCodeUrl: bin.qr_code_url, // ✅ MAPPING ADDED!
+  image: bin.image,
+  organizationId: bin.organization_id,
+  trend: bin.trend,
+});
+
+// Helper function to get auth token from localStorage
+const getAuthToken = (): string | null => {
+  return localStorage.getItem('authToken');
+};
+
+// Define types for API responses
+interface ApiResponse<T> {
+  data: T;
+  status: number;
+  message?: string;
+}
+
+// Helper function to get CSRF token from cookies
+const getCsrfToken = (): string | null => {
+  const name = 'csrftoken';
+  let cookieValue = null;
+  if (document.cookie && document.cookie !== '') {
+    const cookies = document.cookie.split(';');
+    for (let i = 0; i < cookies.length; i++) {
+      const cookie = cookies[i].trim();
+      // Does this cookie string begin with the name we want?
+      if (cookie.substring(0, name.length + 1) === (name + '=')) {
+        cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+        break;
+      }
+    }
+  }
+  return cookieValue;
+};
+
+// Helper function to make API requests
+const makeRequest = async <T>(endpoint: string, options: RequestInit = {}): Promise<T> => {
+  const url = `${API_BASE_URL}${endpoint}`;
+  
+  // Get the auth token
+  const token = getAuthToken();
+  
+  // Get CSRF token
+  const csrfToken = getCsrfToken();
+  
+  const defaultOptions: RequestInit = {
+    headers: {
+      'Content-Type': 'application/json',
+      // Add authentication headers if token exists
+      ...(token && { 'Authorization': `Token ${token}` }),
+      // Add CSRF token if available (only for non-GET requests)
+      ...(csrfToken && ['POST', 'PUT', 'PATCH', 'DELETE'].includes((options.method || 'GET').toUpperCase()) && { 'X-CSRFToken': csrfToken }),
+    },
+    credentials: 'include',  // Important for cookies/session
+  };
+
+  const config = {
+    ...defaultOptions,
+    ...options,
+    headers: {
+      ...defaultOptions.headers,
+      ...options.headers,
+    },
+  };
+
+  try {
+    const response = await fetch(url, config);
+    
+    if (!response.ok) {
+      // If it's a 401 error, remove the invalid token
+      if (response.status === 401) {
+        console.warn('⚠️ Authentication failed (401), removing token');
+        localStorage.removeItem('authToken');
+        localStorage.removeItem('organizationId');
+        localStorage.removeItem('userSession');
+      }
+
+      // Try to read response body for better diagnostics
+      let respText: string | null = null;
+      try {
+        respText = await response.text();
+      } catch (e) {
+        respText = null;
+      }
+
+      // Attempt to parse JSON body
+      let parsedBody: any = null;
+      if (respText) {
+        try { parsedBody = JSON.parse(respText); } catch (e) { parsedBody = respText; }
+      }
+
+      // Log error details for debugging
+      console.error(`❌ API Error [${response.status}]:`, {
+        url,
+        method: config.method || 'GET',
+        error: parsedBody || respText
+      });
+
+      const err: any = new Error(`HTTP error! status: ${response.status}` + (respText ? ` - ${respText}` : ''));
+      err.status = response.status;
+      err.body = parsedBody;
+      throw err;
+    }
+    
+    const data = await response.json();
+    
+    // Log successful requests in development
+    if (import.meta.env.DEV) {
+      console.log(`✅ API Success [${response.status}]:`, url);
+    }
+    
+    return data;
+  } catch (error) {
+    console.error('❌ API request error:', error);
+    throw error;
+  }
+};
+
+// Helper functions to convert frontend (camelCase) objects to backend (snake_case)
+// Normalize a room object for backend (accepts camelCase or snake_case inputs)
+const mapRoomForBackend = (r: any) => ({
+  id: r?.id ?? undefined,
+  name: r?.name ?? r?.roomName ?? undefined,
+  target_humidity: (r?.targetHumidity ?? r?.target_humidity ?? 50),
+  humidity: (r?.humidity ?? r?.current_humidity ?? 0),
+  temperature: (r?.temperature ?? 22),
+  status: r?.status ?? undefined,
+  trend: r?.trend ?? r?.history ?? [],
+});
+
+// Normalize a boiler object for backend (accepts camelCase or snake_case inputs)
+// Normalize device health (accept camelCase or snake_case) and provide defaults
+const normalizeDeviceHealthForBackend = (dh: any) => {
+  if (!dh) return undefined;
+  const lastPing = dh?.lastPing ?? dh?.last_ping ?? undefined;
+  let lastPingIso = lastPing;
+  if (!lastPingIso || (typeof lastPingIso === 'string' && !lastPingIso.includes('T'))) {
+    // Convert non-ISO strings (e.g., "Hozir") to current ISO datetime
+    lastPingIso = new Date().toISOString();
+  }
+
+  return {
+    battery_level: Number(dh?.batteryLevel ?? dh?.battery_level ?? 100),
+    signal_strength: Number(dh?.signalStrength ?? dh?.signal_strength ?? 100),
+    last_ping: lastPingIso,
+    firmware_version: dh?.firmwareVersion ?? dh?.firmware_version ?? '1.0.0',
+    is_online: (dh?.isOnline ?? dh?.is_online) ?? true,
+  };
+};
+
+const mapBoilerForBackend = (b: any) => ({
+  name: b?.name ?? undefined,
+  target_humidity: (b?.targetHumidity ?? b?.target_humidity ?? 50),
+  humidity: (b?.humidity ?? b?.current_humidity ?? 0),
+  temperature: (b?.temperature ?? 22),
+  status: b?.status ?? undefined,
+  trend: b?.trend ?? [],
+  device_health: normalizeDeviceHealthForBackend(b?.deviceHealth ?? b?.device_health),
+  connected_rooms: (b?.connectedRooms ?? b?.connected_rooms ?? []).map(mapRoomForBackend),
+});
+
+// --- Map responses from backend to frontend shapes (snake_case -> camelCase)
+const mapRoomFromBackend = (r: any) => ({
+  id: r?.id,
+  name: r?.name,
+  facilityId: r?.facility ?? r?.facility_id ?? undefined,
+  floor: r?.floor,
+  capacity: r?.capacity,
+  isOccupied: r?.is_occupied ?? r?.isOccupied ?? false,
+  targetHumidity: r?.target_humidity ?? r?.targetHumidity ?? 50,
+  humidity: r?.humidity ?? r?.moisture_level ?? 0,
+  temperature: r?.temperature ?? r?.temp ?? undefined,
+  status: r?.status,
+  trend: r?.trend ?? r?.history ?? [],
+  createdAt: r?.created_at,
+  lastUpdated: r?.last_updated,
+});
+
+const mapBoilerFromBackend = (b: any) => ({
+  id: b?.id,
+  name: b?.name,
+  targetHumidity: b?.target_humidity ?? b?.targetHumidity ?? 50,
+  humidity: b?.humidity ?? b?.current_humidity ?? 0,
+  temperature: b?.temperature ?? 22,
+  status: b?.status,
+  trend: b?.trend ?? [],
+  deviceHealth: b?.device_health ? {
+    batteryLevel: b.device_health.battery_level,
+    signalStrength: b.device_health.signal_strength,
+    lastPing: b.device_health.last_ping,
+    firmwareVersion: b.device_health.firmware_version,
+    isOnline: b.device_health.is_online,
+  } : undefined,
+  connectedRooms: (b?.connected_rooms ?? b?.connectedRooms ?? []).map(mapRoomFromBackend),
+  createdAt: b?.created_at,
+  lastUpdated: b?.last_updated,
+});
+
+// API service for all entities
+export const ApiService = {
+  // Organizations
+  getOrganizations: (): Promise<Organization[]> => 
+    makeRequest<Organization[]>('/organizations/'),
+  
+  getOrganization: (id: string): Promise<Organization> => 
+    makeRequest<Organization>(`/organizations/${id}/`),
+  
+  createOrganization: (org: Organization): Promise<Organization> => 
+    makeRequest<Organization>('/organizations/', { method: 'POST', body: JSON.stringify(org) }),
+  
+  updateOrganization: (id: string, org: Organization): Promise<Organization> => 
+    makeRequest<Organization>(`/organizations/${id}/`, { method: 'PUT', body: JSON.stringify(org) }),
+  
+  deleteOrganization: (id: string): Promise<void> => 
+    makeRequest<void>(`/organizations/${id}/`, { method: 'DELETE' }),
+
+  // Call Requests (Tickets)
+  getCallRequests: (): Promise<CallRequest[]> => 
+    makeRequest<CallRequest[]>('/call-requests/'),
+  
+  getCallRequest: (id: string): Promise<CallRequest> => 
+    makeRequest<CallRequest>(`/call-requests/${id}/`),
+  
+  createCallRequest: (ticket: CallRequest): Promise<CallRequest> => 
+    makeRequest<CallRequest>('/call-requests/', { method: 'POST', body: JSON.stringify(ticket) }),
+  
+  updateCallRequest: (id: string, ticket: CallRequest): Promise<CallRequest> => 
+    makeRequest<CallRequest>(`/call-requests/${id}/`, { method: 'PUT', body: JSON.stringify(ticket) }),
+  
+  deleteCallRequest: (id: string): Promise<void> => 
+    makeRequest<void>(`/call-requests/${id}/`, { method: 'DELETE' }),
+
+  // Moisture Sensors
+  getMoistureSensors: (): Promise<MoistureSensor[]> => 
+    makeRequest<MoistureSensor[]>('/moisture-sensors/'),
+  
+  getMoistureSensor: (id: string): Promise<MoistureSensor> => 
+    makeRequest<MoistureSensor>(`/moisture-sensors/${id}/`),
+  
+  createMoistureSensor: (sensor: MoistureSensor): Promise<MoistureSensor> => 
+    makeRequest<MoistureSensor>('/moisture-sensors/', { method: 'POST', body: JSON.stringify(sensor) }),
+  
+  updateMoistureSensor: (id: string, sensor: MoistureSensor): Promise<MoistureSensor> => 
+    makeRequest<MoistureSensor>(`/moisture-sensors/${id}/`, { method: 'PUT', body: JSON.stringify(sensor) }),
+  
+  deleteMoistureSensor: (id: string): Promise<void> => 
+    makeRequest<void>(`/moisture-sensors/${id}/`, { method: 'DELETE' }),
+
+  // Waste Bins
+  getWasteBins: async (): Promise<WasteBin[]> => {
+    try {
+      const bins = await makeRequest<any[]>('/waste-bins/');
+      
+      // CRITICAL: Remove duplicates by ID before mapping
+      const uniqueBinsMap = new Map<string, any>();
+      for (const bin of bins) {
+        if (bin && bin.id && !uniqueBinsMap.has(bin.id)) {
+          uniqueBinsMap.set(bin.id, bin);
+        }
+      }
+      
+      const uniqueBins = Array.from(uniqueBinsMap.values());
+      
+      // Log if duplicates were found
+      if (bins.length !== uniqueBins.length) {
+        console.warn(`⚠️ API returned duplicate bins: ${bins.length} total, ${uniqueBins.length} unique. Removed ${bins.length - uniqueBins.length} duplicates.`);
+      }
+      
+      return uniqueBins.map(mapWasteBin);
+    } catch (error) {
+      console.error('Error fetching waste bins:', error);
+      return [];
+    }
+  },
+  
+  getWasteBin: async (id: string): Promise<WasteBin> => {
+    const bin = await makeRequest<any>(`/waste-bins/${id}/`);
+    return mapWasteBin(bin);
+  },
+  
+  createWasteBin: (bin: WasteBin): Promise<WasteBin> => {
+    const { organizationId, googleMapsUrl, fillLevel, fillRate, lastAnalysis, imageUrl, imageSource, cameraUrl, isFull, deviceHealth, qrCodeUrl, tozaHudud, image, ...rest } = bin as any;
+    
+    const payload = {
+      ...rest,
+      organization_id: organizationId,
+      google_maps_url: googleMapsUrl,
+      fill_level: fillLevel,
+      fill_rate: fillRate,
+      last_analysis: lastAnalysis,
+      image_url: imageUrl,
+      image_source: imageSource,
+      camera_url: cameraUrl,
+      is_full: isFull,
+      device_health: deviceHealth ? {
+        battery_level: deviceHealth.batteryLevel,
+        signal_strength: deviceHealth.signalStrength,
+        last_ping: deviceHealth.lastPing,
+        firmware_version: deviceHealth.firmwareVersion,
+        is_online: deviceHealth.isOnline,
+      } : undefined,
+      qr_code_url: qrCodeUrl,
+      toza_hudud: tozaHudud,
+      image: image,
+    };
+
+    return makeRequest<any>('/waste-bins/', { method: 'POST', body: JSON.stringify(payload) })
+      .then(mapWasteBin);
+  },
+  
+  updateWasteBin: async (id: string, bin: Partial<WasteBin>): Promise<WasteBin> => {
+    const { organizationId, googleMapsUrl, fillLevel, fillRate, lastAnalysis, imageUrl, imageSource, cameraUrl, isFull, deviceHealth, qrCodeUrl, tozaHudud, image, ...rest } = bin as any;
+    
+    const payload: any = { ...rest };
+    if (organizationId) payload.organization_id = organizationId;
+    if (googleMapsUrl) payload.google_maps_url = googleMapsUrl;
+    if (fillLevel !== undefined) payload.fill_level = fillLevel;
+    if (fillRate !== undefined) payload.fill_rate = fillRate;
+    if (lastAnalysis) payload.last_analysis = lastAnalysis;
+    if (imageUrl) payload.image_url = imageUrl;
+    if (imageSource) payload.image_source = imageSource;
+    if (cameraUrl) payload.camera_url = cameraUrl;
+    if (isFull !== undefined) payload.is_full = isFull;
+    if (deviceHealth) payload.device_health = {
+        battery_level: deviceHealth.batteryLevel,
+        signal_strength: deviceHealth.signalStrength,
+        last_ping: deviceHealth.lastPing,
+        firmware_version: deviceHealth.firmwareVersion,
+        is_online: deviceHealth.isOnline,
+    };
+    if (qrCodeUrl) payload.qr_code_url = qrCodeUrl;
+    if (tozaHudud) payload.toza_hudud = tozaHudud;
+    if (image) payload.image = image;
+
+    const result = await makeRequest<any>(`/waste-bins/${id}/`, { method: 'PUT', body: JSON.stringify(payload) });
+    return mapWasteBin(result);
+  },
+  
+  deleteWasteBin: (id: string): Promise<void> => 
+    makeRequest<void>(`/waste-bins/${id}/`, { method: 'DELETE' }),
+
+  // Trucks
+  getTrucks: async (): Promise<Truck[]> => {
+    try {
+      const trucks = await makeRequest<Truck[]>('/trucks/');
+      
+      // Remove duplicates by ID
+      const uniqueTrucksMap = new Map<string, Truck>();
+      for (const truck of trucks) {
+        if (truck && truck.id && !uniqueTrucksMap.has(truck.id)) {
+          uniqueTrucksMap.set(truck.id, truck);
+        }
+      }
+      
+      return Array.from(uniqueTrucksMap.values());
+    } catch (error) {
+      console.error('Error fetching trucks:', error);
+      return [];
+    }
+  },
+  
+  getTruck: (id: string): Promise<Truck> => 
+    makeRequest<Truck>(`/trucks/${id}/`),
+  
+  createTruck: (truck: Truck): Promise<Truck> => 
+    makeRequest<Truck>('/trucks/', { method: 'POST', body: JSON.stringify(truck) }),
+  
+  updateTruck: (id: string, truck: Truck): Promise<Truck> => 
+    makeRequest<Truck>(`/trucks/${id}/`, { method: 'PUT', body: JSON.stringify(truck) }),
+  
+  deleteTruck: (id: string): Promise<void> => 
+    makeRequest<void>(`/trucks/${id}/`, { method: 'DELETE' }),
+
+  // Facilities
+  getFacilities: async (): Promise<Facility[]> => {
+    try {
+      const data: any[] = await makeRequest<any[]>('/facilities/');
+      
+      // Remove duplicates by ID
+      const uniqueFacilitiesMap = new Map<string, any>();
+      for (const facility of data) {
+        if (facility && facility.id && !uniqueFacilitiesMap.has(facility.id)) {
+          uniqueFacilitiesMap.set(facility.id, facility);
+        }
+      }
+      
+      const uniqueFacilities = Array.from(uniqueFacilitiesMap.values());
+      
+      return uniqueFacilities.map(f => ({
+        ...f,
+        boilers: (f.boilers || []).map((b: any) => mapBoilerFromBackend(b))
+      }));
+    } catch (error) {
+      console.error('Error fetching facilities:', error);
+      return [];
+    }
+  },
+  
+  getFacility: async (id: string): Promise<Facility> => {
+    const f: any = await makeRequest<any>(`/facilities/${id}/`);
+    return {
+      ...f,
+      boilers: (f.boilers || []).map((b: any) => mapBoilerFromBackend(b))
+    } as Facility;
+  },
+  
+  // Build a sanitized payload for backend from a Facility (accepts mixed-case inputs)
+  buildFacilityPayload: (facility: any) => {
+    // Normalize lastMaintenance to ISO string
+    let lastMaintenanceValue = facility.lastMaintenance;
+    if (typeof lastMaintenanceValue === 'string' && !lastMaintenanceValue.includes('T')) {
+      lastMaintenanceValue = new Date().toISOString();
+    } else if (lastMaintenanceValue instanceof Date) {
+      lastMaintenanceValue = lastMaintenanceValue.toISOString();
+    }
+
+    return {
+      name: facility.name,
+      type: facility.type,
+      mfy: facility.mfy,
+      organization_id: facility.organizationId || facility.organization_id,
+      overall_status: facility.overallStatus ?? facility.overall_status,
+      energy_usage: facility.energyUsage ?? facility.energy_usage,
+      efficiency_score: facility.efficiencyScore ?? facility.efficiency_score,
+      manager_name: facility.managerName ?? facility.manager_name,
+      last_maintenance: lastMaintenanceValue,
+      history: facility.history ?? facility.histories ?? [],
+      boilers: (facility.boilers ?? facility.boilers_list ?? []).map((b: any) => mapBoilerForBackend(b))
+    };
+  },
+
+  createFacility: (facility: Facility): Promise<Facility> => {
+    const facilityData = (ApiService as any).buildFacilityPayload(facility);
+    // Helpful debug: show the exact backend payload we will send
+    console.debug('ApiService.createFacility - backend payload:', facilityData);
+    return makeRequest<Facility>('/facilities/', { method: 'POST', body: JSON.stringify(facilityData) });
+  },
+  
+  updateFacility: (id: string, facility: Facility): Promise<Facility> => {
+    const facilityData = (ApiService as any).buildFacilityPayload(facility);
+    // Helpful debug: show the exact backend payload we will send for updates
+    console.debug('ApiService.updateFacility - backend payload:', facilityData);
+    return makeRequest<Facility>(`/facilities/${id}/`, { method: 'PUT', body: JSON.stringify(facilityData) });
+  },
+  
+  deleteFacility: (id: string): Promise<void> => 
+    makeRequest<void>(`/facilities/${id}/`, { method: 'DELETE' }),
+
+  // Rooms
+  getRooms: async (): Promise<Room[]> => {
+    try {
+      const rooms = await makeRequest<Room[]>('/rooms/');
+      
+      // Remove duplicates by ID
+      const uniqueRoomsMap = new Map<string, Room>();
+      for (const room of rooms) {
+        if (room && room.id && !uniqueRoomsMap.has(room.id)) {
+          uniqueRoomsMap.set(room.id, room);
+        }
+      }
+      
+      return Array.from(uniqueRoomsMap.values());
+    } catch (error) {
+      console.error('Error fetching rooms:', error);
+      return [];
+    }
+  },
+  
+  getRoom: (id: string): Promise<Room> => 
+    makeRequest<Room>(`/rooms/${id}/`),
+  
+  createRoom: (room: Room): Promise<Room> => {
+    const roomData = {
+      id: room.id,
+      name: room.name,
+      target_humidity: room.targetHumidity,
+      humidity: room.humidity,
+      temperature: room.temperature,
+      status: room.status,
+      trend: room.trend,
+    };
+    return makeRequest<Room>('/rooms/', { method: 'POST', body: JSON.stringify(roomData) });
+  },
+  
+  updateRoom: (id: string, room: Room): Promise<Room> => {
+    const roomData = {
+      id: room.id,
+      name: room.name,
+      target_humidity: room.targetHumidity,
+      humidity: room.humidity,
+      temperature: room.temperature,
+      status: room.status,
+      trend: room.trend,
+    };
+    return makeRequest<Room>(`/rooms/${id}/`, { method: 'PUT', body: JSON.stringify(roomData) });
+  },
+  
+  deleteRoom: (id: string): Promise<void> => 
+    makeRequest<void>(`/rooms/${id}/`, { method: 'DELETE' }),
+
+  // Boilers
+  getBoilers: async (): Promise<Boiler[]> => {
+    try {
+      const data: any[] = await makeRequest<any[]>('/boilers/');
+      
+      // Remove duplicates by ID
+      const uniqueBoilersMap = new Map<string, any>();
+      for (const boiler of data) {
+        if (boiler && boiler.id && !uniqueBoilersMap.has(boiler.id)) {
+          uniqueBoilersMap.set(boiler.id, boiler);
+        }
+      }
+      
+      const uniqueBoilers = Array.from(uniqueBoilersMap.values());
+      
+      return uniqueBoilers.map(b => mapBoilerFromBackend(b));
+    } catch (error) {
+      console.error('Error fetching boilers:', error);
+      return [];
+    }
+  },
+
+  getBoiler: async (id: string): Promise<Boiler> => {
+    const b: any = await makeRequest<any>(`/boilers/${id}/`);
+    return mapBoilerFromBackend(b);
+  },
+  
+  createBoiler: (boiler: Boiler): Promise<Boiler> => {
+    const data = mapBoilerForBackend(boiler as any);
+    return makeRequest<Boiler>('/boilers/', { method: 'POST', body: JSON.stringify(data) });
+  },
+  
+  updateBoiler: (id: string, boiler: Boiler): Promise<Boiler> => {
+    const data = mapBoilerForBackend(boiler as any);
+    return makeRequest<Boiler>(`/boilers/${id}/`, { method: 'PUT', body: JSON.stringify(data) });
+  },
+  
+  deleteBoiler: (id: string): Promise<void> => 
+    makeRequest<void>(`/boilers/${id}/`, { method: 'DELETE' }),
+
+  // Air Sensors
+  getAirSensors: (): Promise<AirSensor[]> => 
+    makeRequest<AirSensor[]>('/air-sensors/'),
+  
+  getAirSensor: (id: string): Promise<AirSensor> => 
+    makeRequest<AirSensor>(`/air-sensors/${id}/`),
+  
+  createAirSensor: (sensor: AirSensor): Promise<AirSensor> => 
+    makeRequest<AirSensor>('/air-sensors/', { method: 'POST', body: JSON.stringify(sensor) }),
+  
+  updateAirSensor: (id: string, sensor: AirSensor): Promise<AirSensor> => 
+    makeRequest<AirSensor>(`/air-sensors/${id}/`, { method: 'PUT', body: JSON.stringify(sensor) }),
+  
+  deleteAirSensor: (id: string): Promise<void> => 
+    makeRequest<void>(`/air-sensors/${id}/`, { method: 'DELETE' }),
+
+  // SOS Columns
+  getSosColumns: (): Promise<SOSColumn[]> => 
+    makeRequest<SOSColumn[]>('/sos-columns/'),
+  
+  getSosColumn: (id: string): Promise<SOSColumn> => 
+    makeRequest<SOSColumn>(`/sos-columns/${id}/`),
+  
+  createSosColumn: (column: SOSColumn): Promise<SOSColumn> => 
+    makeRequest<SOSColumn>('/sos-columns/', { method: 'POST', body: JSON.stringify(column) }),
+  
+  updateSosColumn: (id: string, column: SOSColumn): Promise<SOSColumn> => 
+    makeRequest<SOSColumn>(`/sos-columns/${id}/`, { method: 'PUT', body: JSON.stringify(column) }),
+  
+  deleteSosColumn: (id: string): Promise<void> => 
+    makeRequest<void>(`/sos-columns/${id}/`, { method: 'DELETE' }),
+
+  // Construction Sites
+  getConstructionSites: (): Promise<ConstructionSite[]> => 
+    makeRequest<ConstructionSite[]>('/construction-sites/'),
+  
+  getConstructionSite: (id: string): Promise<ConstructionSite> => 
+    makeRequest<ConstructionSite>(`/construction-sites/${id}/`),
+  
+  createConstructionSite: (site: ConstructionSite): Promise<ConstructionSite> => 
+    makeRequest<ConstructionSite>('/construction-sites/', { method: 'POST', body: JSON.stringify(site) }),
+  
+  updateConstructionSite: (id: string, site: ConstructionSite): Promise<ConstructionSite> => 
+    makeRequest<ConstructionSite>(`/construction-sites/${id}/`, { method: 'PUT', body: JSON.stringify(site) }),
+  
+  deleteConstructionSite: (id: string): Promise<void> => 
+    makeRequest<void>(`/construction-sites/${id}/`, { method: 'DELETE' }),
+
+  // Light Poles
+  getLightPoles: (): Promise<LightPole[]> => 
+    makeRequest<LightPole[]>('/light-poles/'),
+  
+  getLightPole: (id: string): Promise<LightPole> => 
+    makeRequest<LightPole>(`/light-poles/${id}/`),
+  
+  createLightPole: (pole: LightPole): Promise<LightPole> => 
+    makeRequest<LightPole>('/light-poles/', { method: 'POST', body: JSON.stringify(pole) }),
+  
+  updateLightPole: (id: string, pole: LightPole): Promise<LightPole> => 
+    makeRequest<LightPole>(`/light-poles/${id}/`, { method: 'PUT', body: JSON.stringify(pole) }),
+  
+  deleteLightPole: (id: string): Promise<void> => 
+    makeRequest<void>(`/light-poles/${id}/`, { method: 'DELETE' }),
+
+  // Buses
+  getBuses: (): Promise<Bus[]> => 
+    makeRequest<Bus[]>('/buses/'),
+  
+  getBus: (id: string): Promise<Bus> => 
+    makeRequest<Bus>(`/buses/${id}/`),
+  
+  createBus: (bus: Bus): Promise<Bus> => 
+    makeRequest<Bus>('/buses/', { method: 'POST', body: JSON.stringify(bus) }),
+  
+  updateBus: (id: string, bus: Bus): Promise<Bus> => 
+    makeRequest<Bus>(`/buses/${id}/`, { method: 'PUT', body: JSON.stringify(bus) }),
+  
+  deleteBus: (id: string): Promise<void> => 
+    makeRequest<void>(`/buses/${id}/`, { method: 'DELETE' }),
+
+  // Eco Violations
+  getEcoViolations: (): Promise<EcoViolation[]> => 
+    makeRequest<EcoViolation[]>('/eco-violations/'),
+  
+  getEcoViolation: (id: string): Promise<EcoViolation> => 
+    makeRequest<EcoViolation>(`/eco-violations/${id}/`),
+  
+  createEcoViolation: (violation: EcoViolation): Promise<EcoViolation> => 
+    makeRequest<EcoViolation>('/eco-violations/', { method: 'POST', body: JSON.stringify(violation) }),
+  
+  updateEcoViolation: (id: string, violation: EcoViolation): Promise<EcoViolation> => 
+    makeRequest<EcoViolation>(`/eco-violations/${id}/`, { method: 'PUT', body: JSON.stringify(violation) }),
+  
+  deleteEcoViolation: (id: string): Promise<void> => 
+    makeRequest<void>(`/eco-violations/${id}/`, { method: 'DELETE' }),
+  
+  // IoT Devices
+  getIoTDevices: async (): Promise<IoTDevice[]> => {
+    try {
+      const devices = await makeRequest<any[]>('/iot-devices/');
+      
+      // Remove duplicates by ID
+      const uniqueDevicesMap = new Map<string, any>();
+      for (const device of devices) {
+        if (device && device.id && !uniqueDevicesMap.has(device.id)) {
+          uniqueDevicesMap.set(device.id, device);
+        }
+      }
+      
+      const uniqueDevices = Array.from(uniqueDevicesMap.values());
+      
+      // Map snake_case -> camelCase for UI compatibility
+      return uniqueDevices.map(mapIoTDevice);
+    } catch (error) {
+      console.error('Error fetching IoT devices:', error);
+      return [];
+    }
+  },
+  
+  getIoTDevice: async (id: string): Promise<IoTDevice> => {
+    const d = await makeRequest<any>(`/iot-devices/${id}/`);
+    return mapIoTDevice(d);
+  },
+  
+  createIoTDevice: async (device: IoTDevice): Promise<IoTDevice> => {
+    // Convert camelCase field names to snake_case for Django backend
+    const deviceData = {
+      ...device,
+      device_id: device.deviceId,
+      device_type: device.deviceType,
+      room_id: device.roomId,
+      boiler_id: device.boilerId,
+    };
+    // Remove the camelCase fields to avoid conflicts
+    const { deviceId, deviceType, roomId, boilerId, ...cleanDeviceData } = deviceData;
+    
+    const created = await makeRequest<any>('/iot-devices/', { method: 'POST', body: JSON.stringify(cleanDeviceData) });
+    return mapIoTDevice(created);
+  },
+  
+  updateIoTDevice: async (id: string, device: IoTDevice): Promise<IoTDevice> => {
+    // Convert camelCase field names to snake_case for Django backend
+    const deviceData = {
+      ...device,
+      device_id: device.deviceId,
+      device_type: device.deviceType,
+      room_id: device.roomId,
+      boiler_id: device.boilerId,
+    };
+    // Remove the camelCase fields to avoid conflicts
+    const { deviceId, deviceType, roomId, boilerId, ...cleanDeviceData } = deviceData;
+    
+    const updated = await makeRequest<any>(`/iot-devices/${id}/`, { method: 'PUT', body: JSON.stringify(cleanDeviceData) });
+    return mapIoTDevice(updated);
+  },
+  
+  deleteIoTDevice: (id: string): Promise<void> => 
+    makeRequest<void>(`/iot-devices/${id}/`, { method: 'DELETE' }),
+  
+  // Send IoT sensor data
+  updateIoTDeviceData: (data: {device_id: string, temperature?: number, humidity?: number, sleep_seconds?: number, timestamp?: number}): Promise<any> => 
+    makeRequest<any>('/iot-devices/data/update/', { method: 'POST', body: JSON.stringify(data) }),
+  
+  // Link IoT device to boiler
+  linkIoTDeviceToBoiler: (deviceId: string, boilerId: string): Promise<any> => 
+    makeRequest<any>('/iot-devices/link-to-boiler/', { method: 'POST', body: JSON.stringify({ device_id: deviceId, boiler_id: boilerId }) }),
+  
+  // Link IoT device to room
+  linkIoTDeviceToRoom: (deviceId: string, roomId: string): Promise<any> => 
+    makeRequest<any>(`/iot-devices/link-to-room/`, { method: 'POST', body: JSON.stringify({ device_id: deviceId, room_id: roomId }) }),
+  
+  // Dashboard stats
+  getDashboardStats: (): Promise<any> => 
+    makeRequest<any>('/dashboard/stats/'),
+  
+  // Search functionality
+  searchEntities: (query: string, type?: string): Promise<any> => 
+    makeRequest<any>(`/search/?q=${encodeURIComponent(query)}${type ? `&type=${type}` : ''}`),
+  
+  // ==================== NEW API METHODS FOR ENHANCED FUNCTIONALITY ====================
+  
+  // Waste Tasks
+  getWasteTasks: (): Promise<any[]> => 
+    makeRequest<any[]>('/waste-tasks/'),
+  
+  createWasteTask: (task: any): Promise<any> => 
+    makeRequest<any>('/waste-tasks/', { method: 'POST', body: JSON.stringify(task) }),
+  
+  updateWasteTask: (id: string, updates: any): Promise<any> => 
+    makeRequest<any>(`/waste-tasks/${id}/`, { method: 'PATCH', body: JSON.stringify(updates) }),
+  
+  autoAssignTask: (binId: string): Promise<any> => 
+    makeRequest<any>('/waste-tasks/auto-assign/', { method: 'POST', body: JSON.stringify({ bin_id: binId }) }),
+  
+  // Route Optimization
+  optimizeRoute: (truckId: string, binIds: string[]): Promise<any> => 
+    makeRequest<any>('/routes/optimize/', { method: 'POST', body: JSON.stringify({ truck_id: truckId, bin_ids: binIds }) }),
+  
+  // Alerts
+  getAlerts: (): Promise<any[]> => 
+    makeRequest<any[]>('/alerts/'),
+  
+  createAlert: (alert: any): Promise<any> => 
+    makeRequest<any>('/alerts/', { method: 'POST', body: JSON.stringify(alert) }),
+  
+  // Climate Schedules
+  getClimateSchedules: (): Promise<any[]> => 
+    makeRequest<any[]>('/climate-schedules/'),
+  
+  createClimateSchedule: (schedule: any): Promise<any> => 
+    makeRequest<any>('/climate-schedules/', { method: 'POST', body: JSON.stringify(schedule) }),
+  
+  updateClimateSchedule: (id: string, updates: any): Promise<any> => 
+    makeRequest<any>(`/climate-schedules/${id}/`, { method: 'PATCH', body: JSON.stringify(updates) }),
+  
+  deleteClimateSchedule: (id: string): Promise<void> => 
+    makeRequest<void>(`/climate-schedules/${id}/`, { method: 'DELETE' }),
+  
+  // Reports and Analytics
+  generateEnergyReport: (facilityId: string, reportType: string, startDate?: string, endDate?: string): Promise<any> => 
+    makeRequest<any>('/reports/energy/generate/', { 
+      method: 'POST', 
+      body: JSON.stringify({ facility_id: facilityId, report_type: reportType, start_date: startDate, end_date: endDate }) 
+    }),
+  
+  getWasteStatistics: (): Promise<any> => 
+    makeRequest<any>('/reports/waste/statistics/'),
+  
+  getClimateStatistics: (): Promise<any> => 
+    makeRequest<any>('/reports/climate/statistics/'),
+  
+  // Predictions
+  generateWastePrediction: (binId: string, daysAhead: number = 7): Promise<any[]> => 
+    makeRequest<any[]>('/predictions/waste/', { 
+      method: 'POST', 
+      body: JSON.stringify({ bin_id: binId, days_ahead: daysAhead }) 
+    }),
+  
+  // Driver Performance
+  getDriverPerformance: (truckId: string): Promise<any> => 
+    makeRequest<any>(`/drivers/${truckId}/performance/`),
+
+  // ==================== CHORVA (LIVESTOCK) MODULE ====================
+
+  // Farms
+  getFarms: (): Promise<Farm[]> =>
+    makeRequest<any[]>('/farms/').then(farms => farms.map(mapFarm)),
+  
+  getFarm: (id: string): Promise<Farm> =>
+    makeRequest<any>(`/farms/${id}/`).then(mapFarm),
+  
+  createFarm: (farm: Partial<Farm>): Promise<Farm> =>
+    makeRequest<any>('/farms/', {
+      method: 'POST',
+      body: JSON.stringify(mapFarmToBackend(farm))
+    }).then(mapFarm),
+  
+  updateFarm: (id: string, farm: Partial<Farm>): Promise<Farm> =>
+    makeRequest<any>(`/farms/${id}/`, {
+      method: 'PUT',
+      body: JSON.stringify(mapFarmToBackend(farm))
+    }).then(mapFarm),
+  
+  deleteFarm: (id: string): Promise<void> =>
+    makeRequest<void>(`/farms/${id}/`, { method: 'DELETE' }),
+
+  // Livestock
+  getLivestock: (params?: { farmId?: string; animalType?: string; healthStatus?: string; search?: string }): Promise<LivestockAnimal[]> => {
+    let url = '/livestock/';
+    const queryParams: string[] = [];
+    if (params?.farmId) queryParams.push(`farm_id=${params.farmId}`);
+    if (params?.animalType) queryParams.push(`animal_type=${params.animalType}`);
+    if (params?.healthStatus) queryParams.push(`health_status=${params.healthStatus}`);
+    if (params?.search) queryParams.push(`search=${encodeURIComponent(params.search)}`);
+    if (queryParams.length > 0) url += '?' + queryParams.join('&');
+    return makeRequest<any[]>(url).then(items => items.map(mapLivestock));
+  },
+  
+  getLivestockById: (id: string): Promise<LivestockAnimal> =>
+    makeRequest<any>(`/livestock/${id}/`).then(mapLivestock),
+  
+  createLivestock: (animal: Partial<LivestockAnimal>): Promise<LivestockAnimal> =>
+    makeRequest<any>('/livestock/', {
+      method: 'POST',
+      body: JSON.stringify(mapLivestockToBackend(animal))
+    }).then(mapLivestock),
+  
+  updateLivestock: (id: string, animal: Partial<LivestockAnimal>): Promise<LivestockAnimal> =>
+    makeRequest<any>(`/livestock/${id}/`, {
+      method: 'PUT',
+      body: JSON.stringify(mapLivestockToBackend(animal))
+    }).then(mapLivestock),
+  
+  deleteLivestock: (id: string): Promise<void> =>
+    makeRequest<void>(`/livestock/${id}/`, { method: 'DELETE' }),
+
+  // Livestock Lookup by Microchip (Scanner)
+  lookupByMicrochip: (microchipId: string): Promise<LivestockAnimal> =>
+    makeRequest<any>(`/livestock/lookup/${microchipId}/`).then(mapLivestock),
+
+  // Livestock Passports
+  createLivestockPassport: (passport: Partial<LivestockPassport> & { livestock: string }): Promise<LivestockPassport> =>
+    makeRequest<any>('/livestock-passports/', {
+      method: 'POST',
+      body: JSON.stringify(passport)
+    }),
+  
+  updateLivestockPassport: (id: string, passport: Partial<LivestockPassport>): Promise<LivestockPassport> =>
+    makeRequest<any>(`/livestock-passports/${id}/`, {
+      method: 'PUT',
+      body: JSON.stringify(passport)
+    }),
+
+  // Livestock Statistics
+  getLivestockStatistics: (): Promise<LivestockStatistics> =>
+    makeRequest<any>('/livestock/statistics/overview/').then((s: any) => ({
+      totalFarms: s.total_farms,
+      totalLivestock: s.total_livestock,
+      byType: s.by_type,
+      byHealth: s.by_health,
+      byGender: s.by_gender,
+      totalMicrochips: s.total_microchips,
+      farmsSummary: s.farms_summary,
+    })),
+};
+
+// ==================== CHORVA MAPPERS ====================
+
+const mapFarm = (f: any): Farm => ({
+  id: f.id,
+  name: f.name,
+  ownerName: f.owner_name,
+  ownerPhone: f.owner_phone,
+  farmType: f.farm_type,
+  address: f.address,
+  mfy: f.mfy || '',
+  location: f.location || { lat: 0, lng: 0 },
+  areaHectares: f.area_hectares || 0,
+  establishedDate: f.established_date,
+  isActive: f.is_active,
+  createdAt: f.created_at,
+  updatedAt: f.updated_at,
+  livestockCount: f.livestock_count,
+  livestockStats: f.livestock_stats,
+  organizationId: f.organization,
+});
+
+const mapFarmToBackend = (f: Partial<Farm>): any => {
+  const data: any = {};
+  if (f.name !== undefined) data.name = f.name;
+  if (f.ownerName !== undefined) data.owner_name = f.ownerName;
+  if (f.ownerPhone !== undefined) data.owner_phone = f.ownerPhone;
+  if (f.farmType !== undefined) data.farm_type = f.farmType;
+  if (f.address !== undefined) data.address = f.address;
+  if (f.mfy !== undefined) data.mfy = f.mfy;
+  if (f.location !== undefined) data.location = f.location;
+  if (f.areaHectares !== undefined) data.area_hectares = f.areaHectares;
+  if (f.establishedDate !== undefined) data.established_date = f.establishedDate;
+  if (f.isActive !== undefined) data.is_active = f.isActive;
+  if (f.organizationId !== undefined) data.organization_id = f.organizationId;
+  return data;
+};
+
+const mapLivestock = (l: any): LivestockAnimal => ({
+  id: l.id,
+  farmId: l.farm,
+  farmName: l.farm_name,
+  microchipId: l.microchip_id,
+  animalType: l.animal_type,
+  breed: l.breed,
+  name: l.name || '',
+  gender: l.gender,
+  birthDate: l.birth_date,
+  weightKg: l.weight_kg || 0,
+  color: l.color || '',
+  healthStatus: l.health_status,
+  lastVaccinationDate: l.last_vaccination_date,
+  lastVetCheck: l.last_vet_check,
+  photoUrl: l.photo_url,
+  isActive: l.is_active,
+  notes: l.notes || '',
+  createdAt: l.created_at,
+  updatedAt: l.updated_at,
+  passport: l.passport,
+  microchip: l.microchip,
+});
+
+const mapLivestockToBackend = (l: Partial<LivestockAnimal>): any => {
+  const data: any = {};
+  if (l.farmId !== undefined) data.farm_id = l.farmId;
+  if (l.microchipId !== undefined) data.microchip_id = l.microchipId;
+  if (l.animalType !== undefined) data.animal_type = l.animalType;
+  if (l.breed !== undefined) data.breed = l.breed;
+  if (l.name !== undefined) data.name = l.name;
+  if (l.gender !== undefined) data.gender = l.gender;
+  if (l.birthDate !== undefined) data.birth_date = l.birthDate;
+  if (l.weightKg !== undefined) data.weight_kg = l.weightKg;
+  if (l.color !== undefined) data.color = l.color;
+  if (l.healthStatus !== undefined) data.health_status = l.healthStatus;
+  if (l.lastVaccinationDate !== undefined) data.last_vaccination_date = l.lastVaccinationDate;
+  if (l.lastVetCheck !== undefined) data.last_vet_check = l.lastVetCheck;
+  if (l.photoUrl !== undefined) data.photo_url = l.photoUrl;
+  if (l.isActive !== undefined) data.is_active = l.isActive;
+  if (l.notes !== undefined) data.notes = l.notes;
+  return data;
+};

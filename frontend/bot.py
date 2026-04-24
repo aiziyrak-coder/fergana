@@ -1,0 +1,862 @@
+import logging
+import asyncio
+import requests
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
+import json
+import os
+from urllib.parse import urlparse, parse_qs
+import base64
+from io import BytesIO
+import threading
+
+# Enable logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# Bot token
+BOT_TOKEN = "8542390581:AAEf7VrQnkILs1ZEi71krHNen4x5r_BgNQA"
+
+# Monitor bot token
+MONITOR_BOT_TOKEN = "8542390581:AAEf7VrQnkILs1ZEi71krHNen4x5r_BgNQA"
+
+# Channel to monitor
+CHANNEL_TO_MONITOR = "@springuzz"
+
+# API base URL
+API_BASE_URL = "https://ferganaapi.cdcgroup.uz/api"  # Backend API
+
+class WasteBinBot:
+    def __init__(self):
+        self.bot_token = BOT_TOKEN
+        self.api_base_url = API_BASE_URL
+        # Superadmin credentials based on the backend code
+        self.admin_username = "superadmin"
+        self.admin_password = "123"
+        self.api_token = None
+        # We'll initialize the token when needed in async methods
+    
+    async def ensure_authenticated(self):
+        """Ensure we have a valid authentication token"""
+        if not self.api_token:
+            await self.login_admin()
+        else:
+            # Test if the token is still valid by trying a simple API call
+            headers = self.get_auth_headers()
+            try:
+                # Use the correct endpoint: /auth/validate/ (not /validate-token/)
+                response = requests.get(f"{self.api_base_url}/auth/validate/", headers=headers)
+                if response.status_code != 200:
+                    # Token might be expired, re-login
+                    logger.info("Token validation failed, re-logging in...")
+                    await self.login_admin()
+            except Exception as e:
+                # If validation fails, try to login again
+                logger.warning(f"Token validation error: {e}, re-logging in...")
+                await self.login_admin()
+    
+    async def login_admin(self):
+        """Login as superadmin to get API token"""
+        try:
+            login_data = {
+                "login": self.admin_username,
+                "password": self.admin_password
+            }
+            response = requests.post(f"{self.api_base_url}/auth/login/", json=login_data)
+            if response.status_code == 200:
+                data = response.json()
+                if 'token' in data:
+                    self.api_token = data['token']
+                    logger.info("Successfully logged in as superadmin")
+                else:
+                    logger.error("Login successful but no token returned")
+            else:
+                logger.error(f"Admin login failed: {response.status_code} - {response.text}")
+        except Exception as e:
+            logger.error(f"Exception during admin login: {e}")
+    
+    def get_auth_headers(self):
+        """Get headers with authentication token"""
+        headers = {
+            'Content-Type': 'application/json'
+        }
+        if self.api_token:
+            headers['Authorization'] = f'Token {self.api_token}'
+        return headers
+    
+    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /start command"""
+        if update.message:
+            user = update.effective_user
+            # Extract bin ID from command arguments
+            bin_id = context.args[0] if context.args else None
+            
+            if bin_id:
+                # Get bin details from API
+                bin_details = await self.get_bin_details(bin_id)
+                if bin_details:
+                    # Send bin information to user
+                    await self.send_bin_info(update, bin_details)
+                    
+                    # Ask user to send a photo
+                    await update.message.reply_text(
+                        f"Konteyner: {bin_details.get('address', 'Noma\'lum')}\n\n"
+                        f"Rasm yuboring iltimos!\n"
+                        f"Eslatma: Agar konteyner to'la bo'lsa, tizim avtomatik ravishda xabarnoma yuboradi."
+                    )
+                    
+                    # Store bin ID in user context for later use
+                    if context.user_data is not None:
+                        context.user_data['current_bin_id'] = bin_id
+                else:
+                    await update.message.reply_text(
+                        f"Kechirasiz, bunday ID li konteyner topilmadi: {bin_id}"
+                    )
+            else:
+                await update.message.reply_html(
+                    f"Assalomu alaykum {user.mention_html() if user else 'Foydalanuvchi'}!\n\n"
+                    f"QR kod orqali konteynerni aniqlash uchun quyidagi link orqali kirishingiz mumkin:\n"
+                    f"https://t.me/tozafargonabot\n\n"
+                    f"Konteyner ID: Noma\'lum\n\n"
+                    f"Konteynerni aniqlash uchun /scan komandasini yuboring yoki QR kodni skaner qiling."
+                )
+
+    async def handle_qr_scan(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle QR code scanning - this will be triggered when user sends a message with bin ID"""
+        if update.message:
+            message_text = update.message.text
+            if message_text:
+                # Check if message contains a bin ID (either as a direct ID or in a URL)
+                bin_id = self.extract_bin_id_from_message(message_text)
+                
+                if bin_id:
+                    # Get bin details from API
+                    bin_details = await self.get_bin_details(bin_id)
+                    if bin_details:
+                        # Send bin information to user
+                        await self.send_bin_info(update, bin_details)
+                        
+                        # Ask user to send a photo
+                        await update.message.reply_text(
+                            f"Konteyner: {bin_details.get('address', 'Noma\'lum')}\n\n"
+                            f"Rasm yuboring iltimos!\n"
+                            f"Eslatma: Agar konteyner to'la bo'lsa, tizim avtomatik ravishda xabarnoma yuboradi."
+                        )
+                        
+                        # Store bin ID in user context for later use
+                        if context.user_data is not None:
+                            context.user_data['current_bin_id'] = bin_id
+                    else:
+                        await update.message.reply_text(
+                            f"Kechirasiz, bunday ID li konteyner topilmadi: {bin_id}"
+                        )
+                else:
+                    await update.message.reply_text(
+                        "Iltimos, QR kodni skaner qiling yoki konteyner ID sini kiriting.\n"
+                        "QR kodni skaner qilish uchun kamerangizdan foydalaning va QR kodga yo'naltiring."
+                    )
+
+    def extract_bin_id_from_message(self, message: str):
+        """Extract bin ID from message text (could be a direct ID or URL with ID)"""
+        if not message:
+            return None
+        # Check if message is a URL containing bin ID
+        if 'http' in message.lower():
+            try:
+                parsed_url = urlparse(message)
+                query_params = parse_qs(parsed_url.query)
+                # Look for bin_id in query parameters
+                if 'bin_id' in query_params:
+                    return query_params['bin_id'][0]
+                elif 'id' in query_params:
+                    return query_params['id'][0]
+            except Exception as e:
+                logger.error(f"Error parsing URL: {e}")
+        
+        # Check if message is a direct bin ID (UUID format)
+        if len(message) == 36 and message.count('-') == 4:  # UUID format
+            return message
+        
+        # If message contains a URL path with ID
+        if '/waste-bins/' in message:
+            parts = message.split('/waste-bins/')
+            if len(parts) > 1:
+                bin_id = parts[1].split('/')[0].split('?')[0].split('#')[0]  # Extract ID from path
+                return bin_id
+        
+        return None
+
+    async def get_bin_details(self, bin_id: str):
+        """Get bin details from API"""
+        await self.ensure_authenticated()  # Ensure we're logged in
+        try:
+            headers = self.get_auth_headers()
+            
+            # First try the specific bin endpoint
+            response = requests.get(f"{self.api_base_url}/waste-bins/{bin_id}/", headers=headers)
+            
+            # If unauthorized, try to re-login and get a new token
+            if response.status_code == 401:
+                logger.info("Token expired, re-logging in as superadmin")
+                await self.login_admin()
+                headers = self.get_auth_headers()
+                response = requests.get(f"{self.api_base_url}/waste-bins/{bin_id}/", headers=headers)
+            
+            if response.status_code == 200:
+                return response.json()
+            elif response.status_code == 404:
+                # Bin not found
+                return None
+            else:
+                # Other error
+                logger.error(f"Error getting bin details: {response.status_code} - {response.text}")
+                return None
+        except Exception as e:
+            logger.error(f"Exception getting bin details: {e}")
+            return None
+
+    async def send_bin_info(self, update: Update, bin_details: dict):
+        """Send bin information to user"""
+        if update.message:
+            message = (
+                f"📦 <b>Konteyner Ma'lumotlari:</b>\n\n"
+                f"📍 <b>Manzil:</b> {bin_details.get('address', 'Noma\'lum')}\n"
+                f"🏷️ <b>ID:</b> {bin_details.get('id', 'Noma\'lum')}\n"
+                f"📊 <b>To'ldirish darajasi:</b> {bin_details.get('fill_level', 0)}%\n"
+                f"🚦 <b>Status:</b> {'To\'la' if bin_details.get('is_full', False) else 'Bo\'sh'}\n"
+                f"🏢 <b>Toza hudud:</b> {bin_details.get('toza_hudud', 'Noma\'lum')}\n\n"
+                f"📷 <b>Tasvir yuborish:</b>\n"
+                f"Rasm yuboring iltimos! AI tizimi konteynerni tahlil qiladi.\n\n"
+                f"🤖 <b>AI Tahlili:</b>\n"
+                f"Rasmni tahlil qilish orqali tizim konteynerni to'la yoki bo'sh ekanligini aniqlaydi."
+            )
+            await update.message.reply_text(message, parse_mode='HTML')
+
+    async def handle_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle photo upload and update bin status with the image"""
+        if update.message:
+            user = update.effective_user
+            if update.message.photo:
+                photo = update.message.photo[-1]  # Get the highest resolution photo
+                
+                # Get the file from Telegram
+                file = await context.bot.get_file(photo.file_id)
+                
+                # Download the photo
+                photo_bytes = await file.download_as_bytearray()
+                
+                # Find the bin ID from context
+                bin_id = None
+                if context.user_data:
+                    bin_id = context.user_data.get('current_bin_id')
+                
+                if not bin_id:
+                    # Try to find bin ID from recent command or message
+                    await update.message.reply_text(
+                        "Kechirasiz, konteyner ID sini aniqlay olmadik.\n"
+                        "Iltimos, QR kodni skaner qiling yoki /scan komandasini bosing."
+                    )
+                    return
+                
+                # Get current bin details
+                current_bin = await self.get_bin_details(bin_id)
+                if not current_bin:
+                    await update.message.reply_text("Kechirasiz, konteyner ma'lumotlarini olib kelolmadik.")
+                    return
+                
+                # Upload the photo and update bin status using the API
+                updated_bin = await self.update_bin_with_photo(bin_id, current_bin, file.file_path, bytes(photo_bytes))
+                
+                if updated_bin:
+                    if 'error' in updated_bin:
+                        # AI analysis showed this is not a waste bin
+                        error_msg = updated_bin.get('error', 'Rasm tahlilida xatolik yuz berdi.')
+                        await update.message.reply_text(error_msg)
+                        return
+                    
+                    # Send success message with AI analysis
+                    ai_analysis = updated_bin.get('ai_analysis', {})
+                    confidence = ai_analysis.get('confidence', 0)
+                    is_full = ai_analysis.get('isFull', updated_bin.get('is_full', False))
+                    fill_level = ai_analysis.get('fillLevel', updated_bin.get('fill_level', 0))
+                    notes = ai_analysis.get('notes', 'Tahlil amalga oshirildi')
+                    suggestions = ai_analysis.get('suggestions', '')
+                                    
+                    status_text = "To'la" if is_full else "To'lmagan"
+                                    
+                    response_message = f"✅ Rasm qabul qilindi va tahlil qilindi!\n\n"
+                    response_message += f"📦 <b>Konteyner:</b> {updated_bin.get('address', 'Noma\'lum')}\n"
+                    response_message += f"🚦 <b>Yangi status:</b> {status_text}\n"
+                    response_message += f"📊 <b>To'ldirish darajasi:</b> {fill_level}%\n"
+                    response_message += f"🔍 <b>AI ishonchlilik:</b> {confidence}%\n\n"
+                                    
+                    if notes:
+                        response_message += f"📝 <b>Tahlil:</b> {notes}\n"
+                    if suggestions:
+                        response_message += f"💡 <b>Tavsiya:</b> {suggestions}\n\n"
+                                    
+                    response_message += f"Ko'rsatmalar bo'yicha tashakkur!"
+                                    
+                    await update.message.reply_text(response_message)
+                    
+                    # Notify admin about the new full bin if it's full
+                    if is_full:
+                        await self.notify_admins(bin_id, updated_bin, user)
+                else:
+                    await update.message.reply_text(
+                        "Kechirasiz, konteyner statusini va rasmini yangilay olmadik. Iltimos, keyinroq qayta urinib ko'ring."
+                    )
+
+    async def analyze_image_with_ai(self, image_bytes):
+        """Analyze image using Google AI to determine if bin is full"""
+        try:
+            # Convert image bytes to base64
+            image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+            
+            # Prepare the request to Google AI
+            ai_headers = {
+                'Content-Type': 'application/json',
+            }
+            
+            # Get API key from environment
+            api_key = os.getenv('GEMINI_API_KEY', 'YOUR_API_KEY_HERE')
+            if api_key == 'YOUR_API_KEY_HERE':
+                # CRITICAL: If no API key, return error instead of fake data
+                logger.error("❌ GEMINI_API_KEY not set - cannot perform REAL AI analysis")
+                return {
+                    'isWasteBin': False,
+                    'isFull': False,
+                    'fillLevel': 0,
+                    'confidence': 0,
+                    'notes': '❌ XATOLIK: GEMINI_API_KEY sozlanmagan. Real AI tahlil qilish uchun API kaliti kerak. Iltimos, GEMINI_API_KEY environment variable\'ni sozlang.',
+                    'detectedObjects': [],
+                    'suggestions': 'GEMINI_API_KEY sozlang va qayta urinib ko\'ring'
+                }
+            
+            ai_url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-vision:generateContent?key={api_key}'
+            
+            # Create enhanced prompt for AI with improved analysis for waste bin fill level detection
+            prompt = '''Siz tajriboli atrof-muhitni kuzatuv tizimi ekspertisiz. Rasmni tahlil qiling va quyidagilarni aniqlang:
+            
+            1. Rasmda chiqindi konteyneri bormi? Javob: HA yoki YO'Q.
+            
+            2. AGAR HA BO'LSA, KONTENYERNI TO'QLIK DARAJASINI ANIQLANG:
+            - JUDA TO'LA (90-100%): Konteyner to'qincha to'la, axlat tashqariga chiqib turgan, atrofda axlat yoki sumkalar bor
+            - QATTIQ TO'LA (75-89%): Konteyner deyarli to'la, axlat tashqariga chiqishiga yaqin, kamroq joy bor
+            - TO'LA (60-74%): Konteyner ko'pincha to'la, lekin hali joy bor
+            - YARIM TO'LA (35-59%): Konteyner taxminan yarim to'la
+            - YARIM BO'SH (15-34%): Konteyner kamroq to'la, ko'pincha bo'sh joy bor
+            - DEYARLI BO'SH (0-14%): Konteyner deyarli bo'sh, kamroq axlat bor
+            
+            3. TO'QLIKNI ANIQLASHDA QO'SHIMCHA BELGILAR:
+            - Konteyner ochig'ida axlat ko'rinadimi?
+            - Konteyner atrofida axlatlar yoki sumkalar borimi?
+            - Qopqog'ining ochiq yoki yopiq ekanligi
+            - Konteyner ichidagi axlatlarning miqdori
+            - Axlatning tashqariga chiqish darajasi
+            - Qopqog' ostida axlatlar yoki sumkalar yig'ilganmi?
+            
+            4. AGAR KONTENYER TO'LA BO'LSA, UNING TO'QLIK DARAJASINI ANIQLANG (HA/YO'Q) va FOIZDA:
+            - isFull: TRUE agar 60% va undan yuqori to'la bo'lsa, aks holda FALSE
+            - fillLevel: Aniqlangan to'ldirish darajasini 0-100% oralig'ida
+            
+            5. Agar YO'Q bo'lsa, rasmda nima borligini tushuntiring.
+            
+            6. Rasmda qanday obyektlar aniqlanganligini tavsifli ro'yxat ko'rinishida berin:
+            - Chiqindi konteyneri (shakl, rang, hajm, holati, qopqog'i)
+            - Sumkalar (soni, rangi, joylashuvi)
+            - Axlatlar (turi, miqdori, joylashuvi)
+            - Boshqa obyektlar (odamlar, avtomobillar, bino, daraxt, ko'cha belgilari)
+            
+            7. Agar konteyner to'la bo'lsa, unga qanday chora ko'rish kerakligi bo'yicha takliflaringizni bering.
+            
+            8. Agar konteyner aniqlanmasa, kamera to'g'rimi yoki axlat konteyneri joyida emasmi yoki axlat aniqlanmadi deb xabar bering.
+            
+            Rasmni to'g'ri tekshirish uchun quyidagi belgilarni hisobga oling:
+            - Chiqindi konteyneri odatda to'rtburchak yoki silindrsimon shaklda bo'ladi
+            - Ko'pincha yashil, sariq, ko'k yoki qora rangda bo'ladi
+            - Yozuvlar, logolar yoki chiqindi turi ko'rsatiladi
+            - Qopqog'i yoki ochiq bo'lishi mumkin
+            - Ko'pincha ko'cha yoki bino yonida joylashadi
+            
+            Tahlil qilishda e'tibor bering:
+            - Konteyner ichidagi axlat miqdoriga
+            - Konteyner atrofidagi axlatlarga
+            - Qopqog'ining ochiq yoki yopiq ekanligiga
+            - Axlatning konteyner ichida yoki tashqarisida joylashganligiga
+            - Axlatning konteyner ochig'ida yoki atrofida yig'ilganligiga
+            - Qopqog' ostida axlatlar to'planib qolganmi?
+            
+            Agar rasmda chiqindi konteyneri aniq ko'rinmasa, lekin atrofda bo'lsa, ham "HA" deb belgilang.
+            Agar rasmda chiqindi konteyneri to'la bo'lsa, "HA" deb belgilang, aks holda "YO'Q".
+            
+            Javobni JSON formatda quyidagi kalitlar bilan berin: 
+            - isWasteBin (BOOLEAN): Rasmda chiqindi konteyneri bor yoki yo'q
+            - isFull (BOOLEAN): Konteyner to'la yoki yo'q (60% dan yuqori to'la bo'lsa TRUE, aks holda FALSE)
+            - fillLevel (NUMBER): To'ldirish darajasi (0-100%, tahlil asosida aniqroq aniqlash)
+            - confidence (NUMBER): AI ishonchlilik darajasi (0-100%, tahlil qanchalik aniq bo'lsa shuncha yuqori)
+            - notes (STRING): Batafsil tahlil natijasi va asoslangan fikr
+            - detectedObjects (ARRAY of STRING): Aniqlangan obyektlar ro'yxati
+            - suggestions (STRING): Tavsiyalaringiz
+            
+            Eslatma: Faqat JSON javobini bering, boshqa matn qo'shmang.'''
+            
+            ai_request_body = {
+                'contents': [{
+                    'parts': [
+                        {'text': prompt},
+                        {
+                            'inline_data': {
+                                'mime_type': 'image/jpeg',
+                                'data': image_base64
+                            }
+                        }
+                    ]
+                }],
+                'generationConfig': {
+                    'responseMimeType': 'application/json',
+                    'responseSchema': {
+                        'type': 'OBJECT',
+                        'properties': {
+                            'isWasteBin': {'type': 'BOOLEAN'},
+                            'isFull': {'type': 'BOOLEAN'},
+                            'fillLevel': {'type': 'NUMBER'},
+                            'confidence': {'type': 'NUMBER'},
+                            'notes': {'type': 'STRING'},
+                            'detectedObjects': {
+                                'type': 'ARRAY',
+                                'items': {'type': 'STRING'}
+                            },
+                            'suggestions': {'type': 'STRING'}
+                        },
+                        'required': ['isWasteBin', 'isFull', 'fillLevel', 'confidence', 'notes', 'detectedObjects', 'suggestions']
+                    }
+                }
+            }
+            
+            response = requests.post(ai_url, headers=ai_headers, json=ai_request_body)
+            
+            if response.status_code == 200:
+                result = response.json()
+                candidates = result.get('candidates', [])
+                if candidates:
+                    content = candidates[0].get('content', {})
+                    parts = content.get('parts', [])
+                    if parts:
+                        ai_result = parts[0]  # This should be the JSON response
+                        if isinstance(ai_result, str):
+                            import json as json_lib
+                            ai_result = json_lib.loads(ai_result)
+                        return ai_result
+            else:
+                # If API call fails, return error response
+                logger.error(f"AI API error: {response.status_code} - {response.text}")
+                return {
+                    'isWasteBin': True,  # Assume it's a waste bin since user sent it for analysis
+                    'isFull': False,  # Default to not full
+                    'fillLevel': 50,  # Default to half full
+                    'confidence': 40,  # Lower confidence when API fails
+                    'notes': f'AI xizmatiga ulanishda xatolik yuz berdi: {response.status_code}, standart tahlil qo\'llanilyapti',
+                    'detectedObjects': ['waste bin'],
+                    'suggestions': 'Internet ulanishini tekshiring, rasm sifatini yaxshilang'
+                }
+            
+            # If AI analysis fails, return default values
+            return {
+                'isWasteBin': False,
+                'isFull': False,
+                'fillLevel': 0,
+                'confidence': 0,
+                'notes': 'AI tahlili amalga oshmadi, standart qiymatlar qo\'llanildi',
+                'detectedObjects': [],
+                'suggestions': 'Rasm sifatini yaxshilash kerak, AI tahlilini takrorlash kerak'
+            }
+        except Exception as e:
+            logger.error(f"AI analysis error: {e}")
+            return {
+                'isWasteBin': False,
+                'isFull': False,
+                'fillLevel': 0,
+                'confidence': 0,
+                'notes': f'AI tahlil qilishda xatolik yuz berdi: {str(e)}',
+                'detectedObjects': [],
+                'suggestions': f'AI tahlil qilishda xatolik yuz berdi: {str(e)}'
+            }
+    
+    async def update_bin_with_photo(self, bin_id: str, current_bin: dict, photo_file_path: str, photo_bytes: bytes = None):
+        """Update bin status with photo and AI analysis"""
+        await self.ensure_authenticated()  # Ensure we're logged in
+        try:
+            # Analyze the image with AI
+            ai_analysis = await self.analyze_image_with_ai(photo_bytes) if photo_bytes else {
+                'isWasteBin': True,  # Default to true if no analysis
+                'isFull': True,
+                'fillLevel': 100,
+                'confidence': 80,
+                'notes': 'Rasm tahlili amalga oshmadi'
+            }
+            
+            # Check if image is actually of a waste bin
+            if not ai_analysis.get('isWasteBin', False):
+                return {
+                    'error': 'Bu rasmda chiqindi konteyneri aniqlanmadi. Iltimos, konteyner rasmini yuboring.',
+                    'analysis': ai_analysis
+                }
+            
+            # Create a temporary image URL based on the Telegram file path
+            temp_image_url = f"https://api.telegram.org/file/bot{self.bot_token}/{photo_file_path}"
+            
+            # Prepare updated data based on AI analysis (without image_url since we're uploading the file directly)
+            updated_data = {
+                'is_full': ai_analysis.get('isFull', False),
+                'fill_level': ai_analysis.get('fillLevel', 0),
+                'image_source': 'BOT',  # Mark that the image came from the bot
+                'last_analysis': f"AI tahlili: {ai_analysis.get('notes', 'Tahlil amalga oshirildi')}, Isbot: {ai_analysis.get('isWasteBin')}, IsFull: {ai_analysis.get('isFull')}, Conf: {ai_analysis.get('confidence')}%"
+            }
+            
+            # Download the image from the file path (the photo_bytes should already be provided)
+            if photo_bytes:
+                # Prepare multipart form data for file upload using the provided bytes
+                files = {
+                    'image': (os.path.basename(photo_file_path) if photo_file_path else 'image.jpg', photo_bytes, 'image/jpeg')
+                }
+                
+                # Prepare other data as form data
+                data = {
+                    'is_full': updated_data['is_full'],
+                    'fill_level': updated_data['fill_level'],
+                    'image_source': updated_data['image_source'],
+                    'last_analysis': updated_data['last_analysis']
+                }
+                
+                # Update bin via API using PATCH method for file upload
+                headers = self.get_auth_headers()
+                # Remove Content-Type header to let requests set it automatically for multipart
+                if 'Content-Type' in headers:
+                    del headers['Content-Type']
+                
+                # Try the new endpoint first, fallback to the old one if it fails
+                endpoints_to_try = [
+                    f"{self.api_base_url}/waste-bins/{bin_id}/update-image-file/",
+                    f"{self.api_base_url}/waste-bins/{bin_id}/update-image/",
+                    f"{self.api_base_url}/waste-bins/{bin_id}/"
+                ]
+                
+                response = None
+                for endpoint in endpoints_to_try:
+                    try:
+                        # Ensure we have valid headers with authentication
+                        headers = self.get_auth_headers()
+                        if not headers:
+                            logger.error(f"Could not get valid authentication headers for bin {bin_id}")
+                            return None
+                        
+                        # Remove Content-Type header to let requests set it automatically for multipart
+                        if 'Content-Type' in headers:
+                            del headers['Content-Type']
+                        
+                        response = requests.patch(
+                            endpoint,
+                            files=files,
+                            data=data,
+                            headers=headers
+                        )
+                        if response.status_code in [200, 201]:
+                            break  # Success, exit the loop
+                    except Exception as e:
+                        logger.error(f"Error trying endpoint {endpoint}: {e}")
+                        continue  # Try the next endpoint
+            else:
+                logger.error(f"No photo bytes provided for bin {bin_id}")
+                return None
+            
+            if response.status_code in [200, 201]:
+                logger.info(f"Successfully updated bin {bin_id} with photo and AI analysis")
+                # Return the updated bin information by fetching it again
+                updated_bin = await self.get_bin_details(bin_id)
+                # Add AI analysis to the result
+                if updated_bin:
+                    updated_bin['ai_analysis'] = ai_analysis
+                return updated_bin
+            else:
+                logger.error(f"Error updating bin with photo: {response.status_code}, {response.text}")
+                return None
+        except Exception as e:
+            logger.error(f"Exception updating bin with photo: {e}")
+            return None
+
+    async def update_bin_to_full(self, bin_id: str, current_bin: dict):
+        """Update bin status to full (original function without photo)"""
+        await self.ensure_authenticated()  # Ensure we're logged in
+        try:
+            # For the PATCH request, we only send the fields that need to be updated
+            updated_data = {
+                'is_full': True,
+                'fill_level': 100
+            }
+            
+            # Update bin via API using PATCH method for partial updates
+            headers = self.get_auth_headers()
+            
+            # Try multiple endpoints to update the bin status
+            endpoints_to_try = [
+                f"{self.api_base_url}/waste-bins/{bin_id}/update-image/",
+                f"{self.api_base_url}/waste-bins/{bin_id}/"
+            ]
+            
+            response = None
+            for endpoint in endpoints_to_try:
+                try:
+                    # Ensure we have valid headers with authentication
+                    headers = self.get_auth_headers()
+                    if not headers:
+                        logger.error(f"Could not get valid authentication headers for bin {bin_id}")
+                        return None
+                    
+                    response = requests.patch(
+                        endpoint,
+                        json=updated_data,
+                        headers=headers
+                    )
+                    if response.status_code in [200, 201]:
+                        break  # Success, exit the loop
+                except Exception as e:
+                    logger.error(f"Error trying endpoint {endpoint}: {e}")
+                    continue  # Try the next endpoint
+            
+            if response.status_code in [200, 201]:
+                logger.info(f"Successfully updated bin {bin_id} to full status")
+                # Return the updated bin information by fetching it again
+                return await self.get_bin_details(bin_id)
+            else:
+                logger.error(f"Error updating bin: {response.status_code}, {response.text}")
+                return None
+        except Exception as e:
+            logger.error(f"Exception updating bin: {e}")
+            return None
+
+    async def notify_admins(self, bin_id: str, bin_details: dict, user):
+        """Notify admins about the full bin"""
+        try:
+            # In a real implementation, you would notify admins
+            # For now, just log the information
+            logger.info(f"Admin notification: Bin {bin_id} is now full. Reported by user {user.id if user else 'Unknown'}")
+            
+            # You could send a message to a specific admin group/chat
+            # await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=message)
+        except Exception as e:
+            logger.error(f"Error notifying admins: {e}")
+    
+    def extract_sensor_data(self, message_text: str):
+        """Extract sensor data from message in the format:
+        Qurilma: ESP-100FDA
+        🌡 Harorat: 18.9 °C
+        💧 Havo namligi: 43.0 %
+        ⏱ Sleep: 1800 sekund
+        """
+        import re
+        
+        # Extract device ID - try multiple patterns
+        device_id = None
+        
+        # Pattern 1: "Qurilma: ESP-XXXXX"
+        device_match = re.search(r'Qurilma:\s*(ESP-[\w]+)', message_text, re.IGNORECASE)
+        if device_match:
+            device_id = device_match.group(1).upper()
+        else:
+            # Pattern 2: "ESP-XXXXX" (standalone)
+            esp_match = re.search(r'ESP-([A-Za-z0-9]+)', message_text, re.IGNORECASE)
+            if esp_match:
+                device_id = f"ESP-{esp_match.group(1).upper()}"
+            else:
+                # Pattern 3: 🆔 emoji format
+                id_emoji_match = re.search(r'🆔\s*([A-Za-z0-9_-]+)', message_text)
+                if id_emoji_match:
+                    device_id = id_emoji_match.group(1).strip()
+        
+        # Extract temperature - multiple patterns
+        temperature = None
+        # Pattern 1: 🌡 21.7°C
+        temp_match = re.search(r'🌡\s*([-+]?\d+(?:[\.,]\d+)?)\s*°?C', message_text, re.IGNORECASE)
+        if temp_match:
+            temperature = float(temp_match.group(1).replace(',', '.'))
+        else:
+            # Pattern 2: 🌡 Harorat: 18.9 °C
+            temp_legacy = re.search(r'Harorat:\s*([-+]?\d+(?:[\.,]\d+)?)\s*°?C', message_text, re.IGNORECASE)
+            if temp_legacy:
+                temperature = float(temp_legacy.group(1).replace(',', '.'))
+        
+        # Extract humidity - multiple patterns
+        humidity = None
+        # Pattern 1: 💧 43.9%
+        hum_match = re.search(r'💧\s*([-+]?\d+(?:[\.,]\d+)?)\s*%', message_text)
+        if hum_match:
+            humidity = float(hum_match.group(1).replace(',', '.'))
+        else:
+            # Pattern 2: 💧 Havo namligi: 43.0 %
+            hum_legacy = re.search(r'Havo\s+namligi:\s*([-+]?\d+(?:[\.,]\d+)?)\s*%', message_text, re.IGNORECASE)
+            if hum_legacy:
+                humidity = float(hum_legacy.group(1).replace(',', '.'))
+        
+        # Extract sleep time - multiple patterns
+        sleep_seconds = None
+        # Pattern 1: ⏱ 2000s
+        sleep_match = re.search(r'⏱\s*(\d+)\s*s', message_text, re.IGNORECASE)
+        if sleep_match:
+            sleep_seconds = int(sleep_match.group(1))
+        else:
+            # Pattern 2: ⏱ Sleep: 1800 sekund
+            sleep_legacy = re.search(r'Sleep:\s*(\d+)\s*sekund', message_text, re.IGNORECASE)
+            if sleep_legacy:
+                sleep_seconds = int(sleep_legacy.group(1))
+        
+        if device_id:
+            return {
+                'device_id': device_id,
+                'temperature': temperature,
+                'humidity': humidity,
+                'sleep_seconds': sleep_seconds
+            }
+        
+        return None
+    
+    async def send_sensor_data_to_platform(self, sensor_data: dict):
+        """Send sensor data to the platform using the IoT device data endpoint"""
+        await self.ensure_authenticated()  # Ensure we're logged in
+        try:
+            headers = self.get_auth_headers()
+            
+            # Prepare the data to send
+            data_to_send = {
+                'device_id': sensor_data['device_id'],
+                'temperature': sensor_data.get('temperature'),
+                'humidity': sensor_data.get('humidity'),
+                'sleep_seconds': sensor_data.get('sleep_seconds'),
+                'timestamp': int(asyncio.get_event_loop().time())  # Current timestamp
+            }
+            
+            # Send data to the IoT device data endpoint
+            response = requests.post(
+                f"{self.api_base_url}/iot-devices/data/update/",
+                json=data_to_send,
+                headers=headers
+            )
+            
+            if response.status_code == 200:
+                logger.info(f"Successfully sent sensor data for device {sensor_data['device_id']} to platform")
+                return response.json()
+            else:
+                logger.error(f"Error sending sensor data: {response.status_code}, {response.text}")
+                return None
+        except Exception as e:
+            logger.error(f"Exception sending sensor data: {e}")
+            return None
+
+    async def scan_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /scan command"""
+        if update.message:
+            await update.message.reply_text(
+                "📸 QR kodni skaner qilish uchun kamerangizdan foydalaning.\n\n"
+                "1. QR kodga kamerangizni yo'naltiring\n"
+                "2. Skaner tugmasini bosing\n"
+                "3. Bot avtomatik ravishda konteynerni aniqlaydi\n"
+                "4. So'ralgan rasmiyosni yuboring"
+            )
+
+    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /help command"""
+        if update.message:
+            help_text = (
+                "🤖 <b>Toza Farqona Bot Yordami</b>\n\n"
+                "Bu bot orqali konteynerlarni boshqarishingiz mumkin:\n\n"
+                "🔗 <b>QR kod orqali kirish:</b>\n"
+                "• Har bir konteynergga maxsus QR kod berilgan\n"
+                "• QR kodni skaner qiling\n"
+                "• Bot avtomatik ravishda konteynerni aniqlaydi\n\n"
+                "📷 <b>Rasm yuborish:</b>\n"
+                "• To'ldi deb xabar berish uchun rasm yuboring\n"
+                "• Bot AI yordamida rasmni tahlil qiladi\n"
+                "• Agar chiqindi konteyneri to'la bo'lsa, xabarnoma yuboriladi\n\n"
+                "📋 <b>Mavjud komandalar:</b>\n"
+                "/start - Botni ishga tushirish\n"
+                "/scan - QR kod skaner qilish bo'yicha ko'rsatma\n"
+                "/help - Yordam ko'rsatish"
+            )
+            await update.message.reply_text(help_text, parse_mode='HTML')
+    
+    async def handle_channel_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle messages from the monitored channel"""
+        if update.message and update.message.text:
+            message_text = update.message.text
+            
+            # Check if the message contains sensor data
+            sensor_data = self.extract_sensor_data(message_text)
+            
+            if sensor_data:
+                logger.info(f"Sensor data extracted: {sensor_data}")
+                
+                # Send the data to the platform
+                result = await self.send_sensor_data_to_platform(sensor_data)
+                
+                if result:
+                    logger.info(f"Sensor data successfully sent to platform: {result}")
+                else:
+                    logger.error("Failed to send sensor data to platform")
+
+def main():
+    """Start the bot"""
+    # Create bot instance
+    waste_bot = WasteBinBot()
+    
+    # Create main application using builder pattern
+    # Add error handling for potential conflicts
+    try:
+        # Add error handler to the application builder
+        async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+            # Check if this is a conflict error and handle it gracefully
+            error_str = str(context.error)
+            if "Conflict" in error_str and "getUpdates" in error_str:
+                logger.warning("Telegram conflict detected - this may be due to multiple bot instances. The bot should continue running normally.")
+            else:
+                logger.error(f"Bot error: {context.error}", exc_info=True)
+        
+        main_application = Application.builder().token(BOT_TOKEN).build()
+        main_application.add_error_handler(error_handler)
+        
+        # Add main bot handlers
+        main_application.add_handler(CommandHandler("start", waste_bot.start))
+        main_application.add_handler(CommandHandler("scan", waste_bot.scan_command))
+        main_application.add_handler(CommandHandler("help", waste_bot.help_command))
+        
+        # Handle text messages (for QR codes/IDs)
+        main_application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, waste_bot.handle_qr_scan))
+        
+        # Handle photos
+        main_application.add_handler(MessageHandler(filters.PHOTO, waste_bot.handle_photo))
+        
+        logger.info("Main bot is starting...")
+        logger.info(f"Bot will connect to API at: {API_BASE_URL}")
+        
+        # Run polling with fast response time
+        main_application.run_polling(
+            allowed_updates=Update.ALL_TYPES, 
+            drop_pending_updates=True,
+            poll_interval=1.0,  # Fast polling - 1 second
+            bootstrap_retries=3,  # Limit retries on startup
+        )
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user.")
+    except Exception as e:
+        if "Conflict" in str(e) and "getUpdates" in str(e):
+            logger.error("Bot conflict detected! Another instance is running with the same token.")
+            logger.error("Please stop all other bot instances and try again.")
+            logger.error("You can run: taskkill /F /IM python.exe (Windows) to stop all Python processes.")
+        else:
+            logger.error(f"Error starting bot: {e}", exc_info=True)
+        raise
+
+if __name__ == '__main__':
+    main()

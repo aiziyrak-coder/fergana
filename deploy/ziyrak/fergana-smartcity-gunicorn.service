@@ -1,0 +1,27 @@
+[Unit]
+Description=Gunicorn for Fergana Smartcity (ziyrak.org) — isolated port 8011
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/fergana-smartcity/repo/backend
+Environment="PATH=/opt/fergana-smartcity/venv/bin"
+Environment="DJANGO_SETTINGS_MODULE=smartcity_backend.settings"
+ExecStart=/opt/fergana-smartcity/venv/bin/gunicorn \
+    --workers 3 \
+    --bind 127.0.0.1:8011 \
+    --timeout 120 \
+    --access-logfile /var/log/fergana-smartcity-gunicorn-access.log \
+    --error-logfile /var/log/fergana-smartcity-gunicorn-error.log \
+    --log-level info \
+    smartcity_backend.wsgi:application
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
