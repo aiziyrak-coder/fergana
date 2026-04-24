@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Tab, MoistureSensor, Facility, WasteBin, Truck, Notification, UserRole, UserSession, AirSensor, SensorStatus, SOSColumn, EcoViolation, LightPole, Bus, CallRequest, IoTDevice, Room, Boiler, Farm, LivestockAnimal, LivestockStatistics } from './types';
 import { MOCK_NOTIFICATIONS, GET_MFYS, ALL_MODULES } from './constants';
 import { DB } from './services/storage'; // Import DB
@@ -54,6 +54,8 @@ const App: React.FC = () => {
       window.location.hash === '#portal' ? 'PORTAL' : 'ADMIN'
   );
   const [session, setSession] = useState<UserSession | null>(null);
+  const sessionRef = useRef<UserSession | null>(null);
+  sessionRef.current = session;
   const [activeTab, setActiveTab] = useState<Tab>('DASHBOARD');
   const [loading, setLoading] = useState<boolean>(false); // Start with false, set to true when session exists
   
@@ -86,6 +88,20 @@ const App: React.FC = () => {
   const [autoSosEnabled, setAutoSosEnabled] = useState(false); 
   const [showSosMenu, setShowSosMenu] = useState(false);
   const [lastScanTime, setLastScanTime] = useState<string>("Hozirgina");
+
+  const handleLogout = useCallback(() => {
+      setSession(null);
+      setActiveTab('DASHBOARD');
+      setIsEmergencyMode(false);
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('organizationId');
+      localStorage.removeItem('userSession');
+  }, []);
+
+  useEffect(() => {
+      window.addEventListener('smartcity:auth-lost', handleLogout);
+      return () => window.removeEventListener('smartcity:auth-lost', handleLogout);
+  }, [handleLogout]);
 
   // Load Data on Session Start
   useEffect(() => {
@@ -160,10 +176,8 @@ const App: React.FC = () => {
           }
         } catch (error) {
           console.error('Error loading data:', error);
-          // If the error is related to authentication, clear the session
           if (error instanceof Error && error.message.includes('401')) {
-            localStorage.removeItem('authToken');
-            setSession(null);
+            handleLogout();
           }
         } finally {
           setLoading(false);
@@ -172,7 +186,7 @@ const App: React.FC = () => {
     };
 
     loadData();
-  }, [session]);
+  }, [session, handleLogout]);
 
   // Real-time polling for all data (every 5 seconds)
   useEffect(() => {
@@ -187,7 +201,11 @@ const App: React.FC = () => {
         console.log('⏸️ Polling already in progress, skipping...');
         return;
       }
-      
+      if (!localStorage.getItem('authToken') || !sessionRef.current) {
+        handleLogout();
+        return;
+      }
+
       isPolling = true;
       try {
         // Only log in development mode
@@ -251,12 +269,8 @@ const App: React.FC = () => {
         }
       } catch (error) {
         console.error('❌ Error polling data:', error);
-        // If it's a 401 error, clear session
         if (error instanceof Error && error.message.includes('401')) {
-          localStorage.removeItem('authToken');
-          localStorage.removeItem('organizationId');
-          localStorage.removeItem('userSession');
-          setSession(null);
+          handleLogout();
         }
       } finally {
         isPolling = false;
@@ -265,7 +279,7 @@ const App: React.FC = () => {
     
     // Initial poll after 2 seconds
     const initialTimeout = setTimeout(() => {
-      if (session) {
+      if (localStorage.getItem('authToken') && sessionRef.current) {
         pollData();
       }
     }, 2000);
@@ -274,7 +288,11 @@ const App: React.FC = () => {
     // Increase interval if too many requests
     const pollInterval = 5000; // 5 seconds
     const interval = setInterval(() => {
-      if (session && !isPolling) {
+      if (!localStorage.getItem('authToken') || !sessionRef.current) {
+        handleLogout();
+        return;
+      }
+      if (!isPolling) {
         pollData();
       }
     }, pollInterval);
@@ -283,7 +301,7 @@ const App: React.FC = () => {
       clearTimeout(initialTimeout);
       clearInterval(interval);
     };
-  }, [session]);
+  }, [session, handleLogout]);
 
   // Sync back to DB when state changes - updated to handle async
   useEffect(() => { 
@@ -390,16 +408,6 @@ const App: React.FC = () => {
      else document.body.classList.remove('emergency-active');
   }, [isEmergencyMode]);
 
-  const handleLogout = () => {
-      setSession(null);
-      setActiveTab('DASHBOARD');
-      setIsEmergencyMode(false);
-      // Clear all auth data when logging out
-      localStorage.removeItem('authToken');
-      localStorage.removeItem('organizationId');
-      localStorage.removeItem('userSession');
-  };
-
   const handleDriverIncident = (type: 'REJECTED' | 'TIMEOUT', bin: WasteBin, driverName: string, plateNumber: string) => {
       const message = type === 'REJECTED' 
           ? `Haydovchi ${driverName} (${plateNumber}) ${bin.address} manzilidagi buyurtmani rad etdi!`
@@ -461,9 +469,7 @@ const App: React.FC = () => {
       alert('Konteynerni yangilashda xatolik yuz berdi. Iltimos, qaytadan urinib koring.');
       // If API update fails, revert to local state or just keep the local update
       if (error instanceof Error && error.message.includes('401')) {
-        localStorage.removeItem('authToken');
-        localStorage.removeItem('organizationId');
-        localStorage.removeItem('userSession');
+        handleLogout();
       }
     }
   };

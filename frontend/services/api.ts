@@ -109,6 +109,10 @@ const makeRequest = async <T>(endpoint: string, options: RequestInit = {}): Prom
         localStorage.removeItem('authToken');
         localStorage.removeItem('organizationId');
         localStorage.removeItem('userSession');
+        // Tell the app to drop React session immediately (avoids stale polling after DB/token reset).
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('smartcity:auth-lost'));
+        }
       }
 
       // Try to read response body for better diagnostics

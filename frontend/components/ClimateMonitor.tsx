@@ -207,6 +207,9 @@ const ClimateMonitor: React.FC<ClimateMonitorProps> = ({ facilities, activeMFY =
   
   // Fetch IoT devices helper (used on mount and when Add modal opens)
   const fetchIotDevices = async () => {
+    if (!localStorage.getItem('authToken')) {
+      return;
+    }
     try {
       setLoadingIotDevices(true);
       const devices = await ApiService.getIoTDevices();
@@ -220,8 +223,13 @@ const ClimateMonitor: React.FC<ClimateMonitorProps> = ({ facilities, activeMFY =
 
   // Fetch IoT devices on component mount and poll every 30s
   useEffect(() => {
-    fetchIotDevices();
-    const interval = setInterval(fetchIotDevices, 30000);
+    void fetchIotDevices();
+    const interval = setInterval(() => {
+      if (!localStorage.getItem('authToken')) {
+        return;
+      }
+      void fetchIotDevices();
+    }, 30000);
     return () => clearInterval(interval);
   }, []);
 

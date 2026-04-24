@@ -174,8 +174,8 @@ class AuthService {
       return response.ok;
     } catch (error) {
       console.error('Token validation error:', error);
-      // If network error, assume token is still valid (offline mode)
-      return true;
+      // Cannot verify token — do not keep a possibly-invalid session (e.g. after server DB restore).
+      return false;
     }
   }
 
