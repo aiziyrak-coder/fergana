@@ -64,7 +64,12 @@ class Command(BaseCommand):
                     'region': region,
                     'district': district,
                     'center': org_coord,
-                    'enabled_modules': ['DASHBOARD', 'WASTE', 'CLIMATE']  # Only WASTE and CLIMATE for Farg'ona
+                    'enabled_modules': [
+                        'DASHBOARD',
+                        'WASTE',
+                        'CLIMATE',
+                        'LIVESTOCK',
+                    ],
                 }
             )
             

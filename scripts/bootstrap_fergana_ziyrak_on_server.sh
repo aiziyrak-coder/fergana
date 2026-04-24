@@ -87,6 +87,7 @@ setup_python() {
   cd "${REPO}/backend"
   export DJANGO_SETTINGS_MODULE=smartcity_backend.settings
   python manage.py migrate --noinput
+  python manage.py fix_fergana_user
   python manage.py collectstatic --noinput
 
   mkdir -p "${REPO}/backend/media"

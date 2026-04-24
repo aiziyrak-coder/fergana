@@ -47,8 +47,12 @@ interface LoginResponse {
   token?: string;
 }
 
+/** Must match `services/api.ts` — Vite `VITE_API_BASE_URL` or production default. */
+const AUTH_API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ?? 'https://ferganaapi.ziyrak.org/api';
+
 class AuthService {
-  private baseUrl: string = 'https://ferganaapi.cdcgroup.uz/api';
+  private readonly baseUrl: string = AUTH_API_BASE_URL;
 
   async login(credentials: LoginCredentials): Promise<LoginResponse> {
     try {
