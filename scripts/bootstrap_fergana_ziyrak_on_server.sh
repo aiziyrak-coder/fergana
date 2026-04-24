@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run as root on the VPS. Installs only this app under /opt/fergana-smartcity,
-# enables two new nginx site files, and a dedicated systemd unit on port 8011.
+# enables two new nginx site files, and a dedicated systemd unit on port 8020.
 # Does not modify existing Smartcity/gunicorn on 8000 or unrelated site configs.
 
 set -euo pipefail

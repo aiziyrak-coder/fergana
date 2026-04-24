@@ -1,5 +1,5 @@
 [Unit]
-Description=Gunicorn for Fergana Smartcity (ziyrak.org) — isolated port 8011
+Description=Gunicorn for Fergana Smartcity (ziyrak.org) — isolated port 8020
 After=network.target
 
 [Service]
@@ -11,10 +11,10 @@ Environment="PATH=/opt/fergana-smartcity/venv/bin"
 Environment="DJANGO_SETTINGS_MODULE=smartcity_backend.settings"
 ExecStart=/opt/fergana-smartcity/venv/bin/gunicorn \
     --workers 3 \
-    --bind 127.0.0.1:8011 \
+    --bind 127.0.0.1:8020 \
     --timeout 120 \
-    --access-logfile /var/log/fergana-smartcity-gunicorn-access.log \
-    --error-logfile /var/log/fergana-smartcity-gunicorn-error.log \
+    --access-logfile - \
+    --error-logfile - \
     --log-level info \
     smartcity_backend.wsgi:application
 Restart=on-failure
