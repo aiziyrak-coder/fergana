@@ -23,6 +23,7 @@ require_root() {
 
 ensure_dirs() {
   mkdir -p /var/www/certbot/.well-known/acme-challenge
+  chmod -R a+rX /var/www/certbot || true
   mkdir -p /var/www/fergana.ziyrak.org
   mkdir -p "${BASE}"
 }
