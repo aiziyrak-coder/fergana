@@ -49,6 +49,17 @@ const FooterInfo = () => (
   </div>
 );
 
+const parseModuleTabFromHash = (hash: string): Tab | null => {
+  const normalizedHash = hash.replace(/^#/, '');
+  if (!normalizedHash.startsWith('module/')) {
+    return null;
+  }
+
+  const moduleId = normalizedHash.slice('module/'.length).toUpperCase();
+  const isKnownModule = ALL_MODULES.some((moduleDef) => moduleDef.id === moduleId);
+  return isKnownModule ? (moduleId as Tab) : null;
+};
+
 const App: React.FC = () => {
   const [viewMode, setViewMode] = useState<'ADMIN' | 'PORTAL'>(
       window.location.hash === '#portal' ? 'PORTAL' : 'ADMIN'
@@ -88,6 +99,7 @@ const App: React.FC = () => {
   const [autoSosEnabled, setAutoSosEnabled] = useState(false); 
   const [showSosMenu, setShowSosMenu] = useState(false);
   const [lastScanTime, setLastScanTime] = useState<string>("Hozirgina");
+  const [modulePageTab, setModulePageTab] = useState<Tab | null>(() => parseModuleTabFromHash(window.location.hash));
 
   const handleLogout = useCallback(() => {
       setSession(null);
@@ -393,7 +405,18 @@ const App: React.FC = () => {
   useEffect(() => {
       const handleHashChange = () => {
           const hash = window.location.hash.replace('#', '');
-          setViewMode(hash === 'portal' ? 'PORTAL' : 'ADMIN');
+          if (hash === 'portal') {
+            setViewMode('PORTAL');
+            setModulePageTab(null);
+            return;
+          }
+
+          setViewMode('ADMIN');
+          const hashModuleTab = parseModuleTabFromHash(window.location.hash);
+          setModulePageTab(hashModuleTab);
+          if (hashModuleTab) {
+            setActiveTab(hashModuleTab);
+          }
       };
       
       // Initial check
@@ -595,6 +618,8 @@ const App: React.FC = () => {
 
   const enabledModules = session.enabledModules || [];
   const navItems = ALL_MODULES.filter(m => enabledModules.includes(m.id));
+  const moduleLinkItems = ALL_MODULES.filter(m => m.id !== 'DASHBOARD');
+  const isModuleOnlyPage = modulePageTab !== null;
   const showClimateWidget = enabledModules.includes('CLIMATE');
   const showMapWidget = enabledModules.includes('MOISTURE') || enabledModules.includes('TRANSPORT') || enabledModules.includes('SECURITY');
   const showWasteWidget = enabledModules.includes('WASTE');
@@ -612,7 +637,7 @@ const App: React.FC = () => {
 
       {/* Notifications Drawer */}
       <AnimatePresence>
-          {showNotifications && (
+          {!isModuleOnlyPage && showNotifications && (
               <>
                   <div className="fixed inset-0 z-[60] bg-transparent" onClick={() => setShowNotifications(false)}></div>
                   <motion.div initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} className="fixed top-20 right-4 bottom-12 w-80 bg-white/95 backdrop-blur-xl rounded-[24px] shadow-2xl z-[70] border border-slate-200 flex flex-col overflow-hidden">
@@ -637,8 +662,30 @@ const App: React.FC = () => {
           )}
       </AnimatePresence>
 
-      <div className="absolute inset-0 bottom-4 p-2 flex flex-col gap-2">
-          <header className={`h-14 rounded-[24px] flex items-center justify-between px-5 shadow-sm shrink-0 z-40 backdrop-blur-xl transition-all ${isEmergencyMode ? 'bg-red-900/90 border-2 border-red-500 shadow-[0_0_50px_rgba(255,0,0,0.5)]' : 'ios-glass bg-white/70'}`}>
+      <div className={`absolute inset-0 ${isModuleOnlyPage ? 'p-3' : 'bottom-4 p-2'} flex flex-col gap-2`}>
+          <header className={`rounded-[24px] shadow-sm shrink-0 z-40 backdrop-blur-xl transition-all ${isModuleOnlyPage ? 'min-h-14 px-4 py-3 bg-white/90 border border-slate-200' : `h-14 px-5 ${isEmergencyMode ? 'bg-red-900/90 border-2 border-red-500 shadow-[0_0_50px_rgba(255,0,0,0.5)]' : 'ios-glass bg-white/70'}`}`}>
+            {isModuleOnlyPage ? (
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-3 text-xs">
+                  <a href="#" className="px-2 py-1 rounded-md bg-slate-900 text-white font-bold">Bosh sahifa</a>
+                  <span className="font-bold text-slate-700">Alohida modul sahifalari</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {moduleLinkItems.map((item) => (
+                    <a
+                      key={item.id}
+                      href={`#module/${item.id}`}
+                      className={`px-2 py-1 rounded-md border text-[11px] font-semibold ${
+                        activeTab === item.id ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-200'
+                      }`}
+                    >
+                      {item.label}
+                    </a>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <>
             <div className="flex items-center gap-4 cursor-pointer group" onClick={() => setActiveTab('DASHBOARD')}>
               <div className={`w-10 h-10 rounded-[14px] text-white flex items-center justify-center shadow-lg group-hover:scale-105 transition-transform ${isEmergencyMode ? 'bg-red-600 shadow-red-500/30 animate-bounce' : 'bg-gradient-to-br from-blue-600 to-indigo-600 shadow-blue-500/30'}`}><Radio size={20} strokeWidth={2.5} className={isEmergencyMode ? "animate-ping" : ""} /></div>
               <div className="flex flex-col"><h1 className={`text-lg font-bold tracking-tight leading-none ${isEmergencyMode ? 'text-white' : 'text-slate-800'}`}>{session.user.name}</h1><div className="flex items-center gap-1.5 mt-0.5"><span className={`w-1.5 h-1.5 rounded-full animate-pulse ${isEmergencyMode ? 'bg-red-500 shadow-[0_0_10px_red]' : 'bg-emerald-500'}`}></span><p className={`text-[10px] font-bold tracking-widest uppercase ${isEmergencyMode ? 'text-red-400' : 'text-slate-500'}`}>{session.district.name}</p></div></div>
@@ -714,9 +761,21 @@ const App: React.FC = () => {
                   )}
               </div>
             </div>
+              </>
+            )}
           </header>
 
-          <main className="flex-1 overflow-hidden rounded-[24px] min-h-0 relative">
+          {!isModuleOnlyPage && (
+            <div className="px-2 py-1 rounded-xl bg-white/70 border border-slate-200/70 flex flex-wrap gap-2">
+              {moduleLinkItems.map((item) => (
+                <a key={`quick-${item.id}`} href={`#module/${item.id}`} className="text-[11px] font-semibold text-blue-700 hover:underline">
+                  #{item.id.toLowerCase()}
+                </a>
+              ))}
+            </div>
+          )}
+
+          <main className={`flex-1 overflow-hidden rounded-[24px] min-h-0 relative ${isModuleOnlyPage ? 'ios-glass border border-white/60 shadow-lg' : ''}`}>
             <AnimatePresence mode="wait">
                 {activeTab === 'DASHBOARD' && (
                   <motion.div key="dashboard" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }} className="grid grid-cols-12 gap-2 h-full">
@@ -996,9 +1055,11 @@ const App: React.FC = () => {
             </AnimatePresence>
           </main>
       </div>
+      {!isModuleOnlyPage && (
       <div className="absolute bottom-0 left-0 w-full z-50">
          <FooterInfo />
       </div>
+      )}
     </div>
   );
 };
