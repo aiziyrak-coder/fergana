@@ -49,13 +49,13 @@ const FooterInfo = () => (
   </div>
 );
 
-const parseModuleTabFromHash = (hash: string): Tab | null => {
-  const normalizedHash = hash.replace(/^#/, '');
-  if (!normalizedHash.startsWith('module/')) {
+const parseModuleTabFromPath = (pathname: string): Tab | null => {
+  const normalizedPath = pathname.replace(/\/+$/, '');
+  if (!normalizedPath.startsWith('/module/')) {
     return null;
   }
 
-  const moduleId = normalizedHash.slice('module/'.length).toUpperCase();
+  const moduleId = normalizedPath.slice('/module/'.length).toUpperCase();
   const isKnownModule = ALL_MODULES.some((moduleDef) => moduleDef.id === moduleId);
   return isKnownModule ? (moduleId as Tab) : null;
 };
@@ -99,7 +99,7 @@ const App: React.FC = () => {
   const [autoSosEnabled, setAutoSosEnabled] = useState(false); 
   const [showSosMenu, setShowSosMenu] = useState(false);
   const [lastScanTime, setLastScanTime] = useState<string>("Hozirgina");
-  const [modulePageTab, setModulePageTab] = useState<Tab | null>(() => parseModuleTabFromHash(window.location.hash));
+  const [modulePageTab, setModulePageTab] = useState<Tab | null>(() => parseModuleTabFromPath(window.location.pathname));
 
   const handleLogout = useCallback(() => {
       setSession(null);
@@ -403,7 +403,7 @@ const App: React.FC = () => {
   }, [iotDevices]);
 
   useEffect(() => {
-      const handleHashChange = () => {
+      const handleLocationChange = () => {
           const hash = window.location.hash.replace('#', '');
           if (hash === 'portal') {
             setViewMode('PORTAL');
@@ -412,18 +412,21 @@ const App: React.FC = () => {
           }
 
           setViewMode('ADMIN');
-          const hashModuleTab = parseModuleTabFromHash(window.location.hash);
-          setModulePageTab(hashModuleTab);
-          if (hashModuleTab) {
-            setActiveTab(hashModuleTab);
+          const pathModuleTab = parseModuleTabFromPath(window.location.pathname);
+          setModulePageTab(pathModuleTab);
+          if (pathModuleTab) {
+            setActiveTab(pathModuleTab);
           }
       };
       
-      // Initial check
-      handleHashChange();
+      handleLocationChange();
 
-      window.addEventListener('hashchange', handleHashChange);
-      return () => window.removeEventListener('hashchange', handleHashChange);
+      window.addEventListener('hashchange', handleLocationChange);
+      window.addEventListener('popstate', handleLocationChange);
+      return () => {
+        window.removeEventListener('hashchange', handleLocationChange);
+        window.removeEventListener('popstate', handleLocationChange);
+      };
   }, []);
 
   useEffect(() => {
@@ -667,14 +670,14 @@ const App: React.FC = () => {
             {isModuleOnlyPage ? (
               <div className="flex flex-col gap-2">
                 <div className="flex items-center gap-3 text-xs">
-                  <a href="#" className="px-2 py-1 rounded-md bg-slate-900 text-white font-bold">Bosh sahifa</a>
+                  <a href="/" className="px-2 py-1 rounded-md bg-slate-900 text-white font-bold">Bosh sahifa</a>
                   <span className="font-bold text-slate-700">Alohida modul sahifalari</span>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   {moduleLinkItems.map((item) => (
                     <a
                       key={item.id}
-                      href={`#module/${item.id}`}
+                      href={`/module/${item.id}`}
                       className={`px-2 py-1 rounded-md border text-[11px] font-semibold ${
                         activeTab === item.id ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-200'
                       }`}
@@ -764,16 +767,6 @@ const App: React.FC = () => {
               </>
             )}
           </header>
-
-          {!isModuleOnlyPage && (
-            <div className="px-2 py-1 rounded-xl bg-white/70 border border-slate-200/70 flex flex-wrap gap-2">
-              {moduleLinkItems.map((item) => (
-                <a key={`quick-${item.id}`} href={`#module/${item.id}`} className="text-[11px] font-semibold text-blue-700 hover:underline">
-                  #{item.id.toLowerCase()}
-                </a>
-              ))}
-            </div>
-          )}
 
           <main className={`flex-1 overflow-hidden rounded-[24px] min-h-0 relative ${isModuleOnlyPage ? 'ios-glass border border-white/60 shadow-lg' : ''}`}>
             <AnimatePresence mode="wait">
