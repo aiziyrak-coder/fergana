@@ -667,7 +667,7 @@ const App: React.FC = () => {
 
       <div className={`absolute inset-0 ${isModuleOnlyPage ? 'p-0' : 'bottom-4 p-2'} flex flex-col gap-2`}>
           {!isModuleOnlyPage && (
-          <header className={`rounded-[24px] shadow-sm shrink-0 z-40 backdrop-blur-xl transition-all h-14 px-5 ${isEmergencyMode ? 'bg-red-900/90 border-2 border-red-500 shadow-[0_0_50px_rgba(255,0,0,0.5)]' : 'ios-glass bg-white/70'}`}>
+          <header className={`h-14 rounded-[24px] flex items-center justify-between px-5 shadow-sm shrink-0 z-40 backdrop-blur-xl transition-all ${isEmergencyMode ? 'bg-red-900/90 border-2 border-red-500 shadow-[0_0_50px_rgba(255,0,0,0.5)]' : 'ios-glass bg-white/70'}`}>
             <div className="flex items-center gap-4 cursor-pointer group" onClick={() => setActiveTab('DASHBOARD')}>
               <div className={`w-10 h-10 rounded-[14px] text-white flex items-center justify-center shadow-lg group-hover:scale-105 transition-transform ${isEmergencyMode ? 'bg-red-600 shadow-red-500/30 animate-bounce' : 'bg-gradient-to-br from-blue-600 to-indigo-600 shadow-blue-500/30'}`}><Radio size={20} strokeWidth={2.5} className={isEmergencyMode ? "animate-ping" : ""} /></div>
               <div className="flex flex-col"><h1 className={`text-lg font-bold tracking-tight leading-none ${isEmergencyMode ? 'text-white' : 'text-slate-800'}`}>{session.user.name}</h1><div className="flex items-center gap-1.5 mt-0.5"><span className={`w-1.5 h-1.5 rounded-full animate-pulse ${isEmergencyMode ? 'bg-red-500 shadow-[0_0_10px_red]' : 'bg-emerald-500'}`}></span><p className={`text-[10px] font-bold tracking-widest uppercase ${isEmergencyMode ? 'text-red-400' : 'text-slate-500'}`}>{session.district.name}</p></div></div>
