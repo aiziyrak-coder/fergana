@@ -665,30 +665,9 @@ const App: React.FC = () => {
           )}
       </AnimatePresence>
 
-      <div className={`absolute inset-0 ${isModuleOnlyPage ? 'p-3' : 'bottom-4 p-2'} flex flex-col gap-2`}>
-          <header className={`rounded-[24px] shadow-sm shrink-0 z-40 backdrop-blur-xl transition-all ${isModuleOnlyPage ? 'min-h-14 px-4 py-3 bg-white/90 border border-slate-200' : `h-14 px-5 ${isEmergencyMode ? 'bg-red-900/90 border-2 border-red-500 shadow-[0_0_50px_rgba(255,0,0,0.5)]' : 'ios-glass bg-white/70'}`}`}>
-            {isModuleOnlyPage ? (
-              <div className="flex flex-col gap-2">
-                <div className="flex items-center gap-3 text-xs">
-                  <a href="/" className="px-2 py-1 rounded-md bg-slate-900 text-white font-bold">Bosh sahifa</a>
-                  <span className="font-bold text-slate-700">Alohida modul sahifalari</span>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  {moduleLinkItems.map((item) => (
-                    <a
-                      key={item.id}
-                      href={`/module/${item.id}`}
-                      className={`px-2 py-1 rounded-md border text-[11px] font-semibold ${
-                        activeTab === item.id ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-200'
-                      }`}
-                    >
-                      {item.label}
-                    </a>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <>
+      <div className={`absolute inset-0 ${isModuleOnlyPage ? 'p-0' : 'bottom-4 p-2'} flex flex-col gap-2`}>
+          {!isModuleOnlyPage && (
+          <header className={`rounded-[24px] shadow-sm shrink-0 z-40 backdrop-blur-xl transition-all h-14 px-5 ${isEmergencyMode ? 'bg-red-900/90 border-2 border-red-500 shadow-[0_0_50px_rgba(255,0,0,0.5)]' : 'ios-glass bg-white/70'}`}>
             <div className="flex items-center gap-4 cursor-pointer group" onClick={() => setActiveTab('DASHBOARD')}>
               <div className={`w-10 h-10 rounded-[14px] text-white flex items-center justify-center shadow-lg group-hover:scale-105 transition-transform ${isEmergencyMode ? 'bg-red-600 shadow-red-500/30 animate-bounce' : 'bg-gradient-to-br from-blue-600 to-indigo-600 shadow-blue-500/30'}`}><Radio size={20} strokeWidth={2.5} className={isEmergencyMode ? "animate-ping" : ""} /></div>
               <div className="flex flex-col"><h1 className={`text-lg font-bold tracking-tight leading-none ${isEmergencyMode ? 'text-white' : 'text-slate-800'}`}>{session.user.name}</h1><div className="flex items-center gap-1.5 mt-0.5"><span className={`w-1.5 h-1.5 rounded-full animate-pulse ${isEmergencyMode ? 'bg-red-500 shadow-[0_0_10px_red]' : 'bg-emerald-500'}`}></span><p className={`text-[10px] font-bold tracking-widest uppercase ${isEmergencyMode ? 'text-red-400' : 'text-slate-500'}`}>{session.district.name}</p></div></div>
@@ -764,11 +743,10 @@ const App: React.FC = () => {
                   )}
               </div>
             </div>
-              </>
-            )}
           </header>
+          )}
 
-          <main className={`flex-1 overflow-hidden rounded-[24px] min-h-0 relative ${isModuleOnlyPage ? 'ios-glass border border-white/60 shadow-lg' : ''}`}>
+          <main className={`flex-1 overflow-hidden min-h-0 relative ${isModuleOnlyPage ? '' : 'rounded-[24px]'}`}>
             <AnimatePresence mode="wait">
                 {activeTab === 'DASHBOARD' && (
                   <motion.div key="dashboard" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }} className="grid grid-cols-12 gap-2 h-full">
